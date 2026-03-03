@@ -1,0 +1,10 @@
+test_*
+/output
+/models
+/runs
+/data
+/.vscode
+/.senweaver
+__pycache__
+*.ts
+*.pt

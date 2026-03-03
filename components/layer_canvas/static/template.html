@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Layer Canvas</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app" class="layer-canvas-container">
+        <!-- Main Canvas Area -->
+        <div class="canvas-wrapper" ref="canvasWrapper">
+            <canvas id="mainCanvas" ref="canvas"></canvas>
+            <canvas id="interactionCanvas" ref="interactionCanvas"></canvas>
+            
+            <!-- Loading Overlay -->
+            <div class="loading-overlay" v-if="loading">
+                <div class="loading-spinner"></div>
+                <span>Loading...</span>
+            </div>
+            
+            <!-- Tooltip -->
+            <div class="tooltip" v-if="tooltip" :style="{ left: tooltip.x + 'px', top: tooltip.y + 'px' }">
+                {{ tooltip.text }}
+            </div>
+        </div>
+        
+        <!-- Control Panel -->
+        <div class="control-panel" v-if="showControls">
+            <div class="panel-header">
+                <h3>Layers</h3>
+                <div class="panel-actions">
+                    <button @click="addRectLayer" title="Add Rectangle Layer">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><rect x="3" y="3" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                    </button>
+                    <button @click="addMaskLayer" title="Add Mask Layer">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+                    </button>
+                    <button @click="clearAllLayers" title="Clear All Layers">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path d="M19 6L5 18M5 6l14 12" stroke="currentColor" stroke-width="2"/></svg>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Layer List -->
+            <div class="layer-list">
+                <div 
+                    v-for="(layer, index) in sortedLayers" 
+                    :key="layer.id"
+                    class="layer-item"
+                    :class="{ active: selectedLayerId === layer.id }"
+                    @click="selectLayer(layer.id)"
+                    draggable="true"
+                    @dragstart="dragStartLayer(index, $event)"
+                    @dragover.prevent
+                    @drop="dropLayer(index, $event)"
+                >
+                    <div class="layer-icon">
+                        <svg v-if="layer.type === 'rect'" viewBox="0 0 24 24" width="20" height="20">
+                            <rect x="3" y="3" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"/>
+                        </svg>
+                        <svg v-else viewBox="0 0 24 24" width="20" height="20">
+                            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+                        </svg>
+                    </div>
+                    <div class="layer-info">
+                        <input 
+                            type="text" 
+                            v-model="layer.name" 
+                            @click.stop
+                            class="layer-name-input"
+                        />
+                    </div>
+                    <div class="layer-controls">
+                        <button @click.stop="toggleLayerVisibility(layer.id)" :title="layer.visible ? 'Hide' : 'Show'">
+                            <svg v-if="layer.visible" viewBox="0 0 24 24" width="16" height="16">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" fill="none" stroke="currentColor" stroke-width="2"/>
+                                <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+                            </svg>
+                            <svg v-else viewBox="0 0 24 24" width="16" height="16">
+                                <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24" fill="none" stroke="currentColor" stroke-width="2"/>
+                                <line x1="1" y1="1" x2="23" y2="23" stroke="currentColor" stroke-width="2"/>
+                            </svg>
+                        </button>
+                        <button @click.stop="deleteLayer(layer.id)" title="Delete">
+                            <svg viewBox="0 0 24 24" width="16" height="16">
+                                <path d="M3 6h18M8 6V4h8v2m1 0v14a2 2 0 01-2 2H9a2 2 0 01-2-2V6h10z" fill="none" stroke="currentColor" stroke-width="2"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Layer Properties -->
+            <div class="layer-properties" v-if="selectedLayer">
+                <h4>Properties</h4>
+                <div class="property-row">
+                    <label>Opacity:</label>
+                    <input 
+                        type="range" 
+                        min="0" 
+                        max="1" 
+                        step="0.1" 
+                        v-model.number="selectedLayer.opacity"
+                        @input="updateLayer"
+                    />
+                    <span>{{ Math.round(selectedLayer.opacity * 100) }}%</span>
+                </div>
+                
+                <template v-if="selectedLayer.type === 'rect'">
+                    <div class="property-row">
+                        <label>X:</label>
+                        <input type="number" v-model.number="selectedLayer.x" @input="updateLayer" />
+                    </div>
+                    <div class="property-row">
+                        <label>Y:</label>
+                        <input type="number" v-model.number="selectedLayer.y" @input="updateLayer" />
+                    </div>
+                    <div class="property-row">
+                        <label>Width:</label>
+                        <input type="number" v-model.number="selectedLayer.width" @input="updateLayer" />
+                    </div>
+                    <div class="property-row">
+                        <label>Height:</label>
+                        <input type="number" v-model.number="selectedLayer.height" @input="updateLayer" />
+                    </div>
+                    <div class="property-row">
+                        <label>Fill Color:</label>
+                        <input type="color" v-model="selectedLayer.color" @input="updateLayer" />
+                    </div>
+                    <div class="property-row">
+                        <label>Stroke Color:</label>
+                        <input type="color" v-model="selectedLayer.strokeColor" @input="updateLayer" />
+                    </div>
+                    <div class="property-row">
+                        <label>Stroke Width:</label>
+                        <input type="number" min="0" v-model.number="selectedLayer.strokeWidth" @input="updateLayer" />
+                    </div>
+                    <div class="property-row">
+                        <label>Fill:</label>
+                        <input type="checkbox" v-model="selectedLayer.fill" @change="updateLayer" />
+                    </div>
+                    <div class="property-row">
+                        <label>Border Radius:</label>
+                        <input type="number" min="0" v-model.number="selectedLayer.borderRadius" @input="updateLayer" />
+                    </div>
+                </template>
+                
+                <template v-if="selectedLayer.type === 'mask'">
+                    <div class="property-row">
+                        <label>Mask Color:</label>
+                        <input type="color" v-model="selectedLayer.color" @input="updateLayer" />
+                    </div>
+                    <div class="property-row">
+                        <label>Mask Opacity:</label>
+                        <input 
+                            type="range" 
+                            min="0" 
+                            max="1" 
+                            step="0.05" 
+                            v-model.number="selectedLayer.maskOpacity"
+                            @input="updateLayer"
+                        />
+                        <span>{{ Math.round(selectedLayer.maskOpacity * 100) }}%</span>
+                    </div>
+                    
+                    <!-- Mask Regions -->
+                    <div class="mask-regions">
+                        <h5>Regions (Holes)</h5>
+                        <button @click="addMaskRegion" class="add-region-btn">Add Region</button>
+                        <div v-for="(region, idx) in selectedLayer.regions" :key="idx" class="region-item">
+                            <span>Region {{ idx + 1 }}</span>
+                            <button @click="removeMaskRegion(idx)" class="remove-btn">×</button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+            
+            <!-- View Controls -->
+            <div class="view-controls">
+                <h4>View</h4>
+                <div class="zoom-controls">
+                    <button @click="zoomIn" title="Zoom In">+</button>
+                    <span>{{ Math.round(zoom * 100) }}%</span>
+                    <button @click="zoomOut" title="Zoom Out">−</button>
+                    <button @click="resetView" title="Reset View">⟲</button>
+                </div>
+                <div class="property-row">
+                    <label>
+                        <input type="checkbox" v-model="showGrid" />
+                        Show Grid
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Export -->
+            <div class="export-controls">
+                <button @click="exportImage" class="export-btn">Export Image</button>
+                <button @click="exportJSON" class="export-btn">Export JSON</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
