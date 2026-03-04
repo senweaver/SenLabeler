@@ -20,7 +20,6 @@
     var tooltip = element.querySelector(".tooltip");
     var controlPanel = element.querySelector(".control-panel");
     var layerList = element.querySelector(".layer-list");
-    var layerProperties = element.querySelector(".layer-properties");
     var loadingIndicator = element.querySelector(".loading-indicator");
     var placeholder = element.querySelector(".placeholder");
 
@@ -33,13 +32,8 @@
     var addRectBtn = element.querySelector(".add-rect-btn");
     var addMaskBtn = element.querySelector(".add-mask-btn");
     var clearAllBtn = element.querySelector(".clear-all-btn");
-    var zoomInBtn = element.querySelector(".zoom-in-btn");
-    var zoomOutBtn = element.querySelector(".zoom-out-btn");
     var resetViewBtn = element.querySelector(".reset-view-btn");
     var exportJsonBtn = element.querySelector(".export-json-btn");
-    
-    // Additional controls (optional - may not exist in template)
-    var opacitySlider = element.querySelector(".opacity-slider");
 
     // ── State ──────────────────────────────────────────────────────
 
@@ -60,7 +54,12 @@
         selectedLayerId: null,
         isDrawing: false,
         drawStart: null,      // { x, y } in canvas coordinates
-        nextLayerId: 1
+        nextLayerId: 1,
+        isDraggingLayer: false,
+        dragStartX: 0,
+        dragStartY: 0,
+        dragStartData: null,
+        resizeHandle: null    // null or handle index (0-7)
     };
 
     // Layer types
@@ -422,6 +421,7 @@
 
             html += '<div class="layer-item' + (isSelected ? ' active' : '') + '" data-id="' + layer.id + '">';
             html += '<span class="layer-icon">' + icon + '</span>';
+            html += '<input type="color" class="layer-color-picker" data-id="' + layer.id + '" value="' + layer.color + '" title="Change color">';
             html += '<span class="layer-name">' + escapeHtml(layer.name) + '</span>';
             html += '<div class="layer-controls">';
             html += '<button class="layer-btn visibility-btn' + (layer.visible ? '' : ' hidden') + '" data-id="' + layer.id + '" title="Toggle visibility">' + (layer.visible ? '&#128065;' : '&#128065;&#8205;&#128488;') + '</button>';
@@ -436,44 +436,8 @@
 
         layerList.innerHTML = html;
 
-        // Render layer properties
-        renderLayerProperties();
-
         // Bind events
         bindLayerEvents();
-    }
-
-    function renderLayerProperties() {
-        if (state.selectedLayerId == null) {
-            layerProperties.classList.remove("visible");
-            return;
-        }
-
-        var layer = findLayerById(state.selectedLayerId);
-        if (!layer) {
-            layerProperties.classList.remove("visible");
-            return;
-        }
-
-        layerProperties.classList.add("visible");
-
-        var html = '<div class="prop-section">';
-
-        if (layer.type === LAYER_TYPES.RECTANGLE) {
-            html += '<div class="prop-row"><label>X:</label><input type="number" class="prop-x" value="' + layer.data.x.toFixed(1) + '"></div>';
-            html += '<div class="prop-row"><label>Y:</label><input type="number" class="prop-y" value="' + layer.data.y.toFixed(1) + '"></div>';
-            html += '<div class="prop-row"><label>Width:</label><input type="number" class="prop-width" value="' + layer.data.width.toFixed(1) + '"></div>';
-            html += '<div class="prop-row"><label>Height:</label><input type="number" class="prop-height" value="' + layer.data.height.toFixed(1) + '"></div>';
-        }
-
-        html += '<div class="prop-row"><label>Color:</label><input type="color" class="prop-color" value="' + layer.color + '"></div>';
-        html += '<div class="prop-row"><label>Opacity:</label><input type="range" class="prop-opacity" min="0" max="100" value="30"><span>30%</span></div>';
-        html += '</div>';
-
-        layerProperties.innerHTML = html;
-
-        // Bind property events
-        bindPropertyEvents(layer);
     }
 
     function bindLayerEvents() {
@@ -481,9 +445,26 @@
         var items = layerList.querySelectorAll(".layer-item");
         for (var i = 0; i < items.length; i++) {
             items[i].addEventListener("click", function (e) {
-                if (e.target.closest(".layer-controls")) return;
+                if (e.target.closest(".layer-controls") || e.target.classList.contains("layer-color-picker")) return;
                 var id = parseInt(this.getAttribute("data-id"), 10);
                 selectLayer(id);
+            });
+        }
+
+        // Color picker in layer list
+        var colorPickers = layerList.querySelectorAll(".layer-color-picker");
+        for (var i = 0; i < colorPickers.length; i++) {
+            colorPickers[i].addEventListener("click", function (e) {
+                e.stopPropagation();
+            });
+            colorPickers[i].addEventListener("input", function (e) {
+                e.stopPropagation();
+                var id = parseInt(this.getAttribute("data-id"), 10);
+                var layer = findLayerById(id);
+                if (layer) {
+                    layer.color = this.value;
+                    render();
+                }
             });
         }
 
@@ -504,35 +485,6 @@
                 e.stopPropagation();
                 var id = parseInt(this.getAttribute("data-id"), 10);
                 deleteLayer(id);
-            });
-        }
-    }
-
-    function bindPropertyEvents(layer) {
-        var xInput = layerProperties.querySelector(".prop-x");
-        var yInput = layerProperties.querySelector(".prop-y");
-        var wInput = layerProperties.querySelector(".prop-width");
-        var hInput = layerProperties.querySelector(".prop-height");
-        var colorInput = layerProperties.querySelector(".prop-color");
-
-        function updateRect() {
-            if (xInput) layer.data.x = parseFloat(xInput.value) || 0;
-            if (yInput) layer.data.y = parseFloat(yInput.value) || 0;
-            if (wInput) layer.data.width = parseFloat(wInput.value) || 0;
-            if (hInput) layer.data.height = parseFloat(hInput.value) || 0;
-            render();
-        }
-
-        if (xInput) xInput.addEventListener("change", updateRect);
-        if (yInput) yInput.addEventListener("change", updateRect);
-        if (wInput) wInput.addEventListener("change", updateRect);
-        if (hInput) hInput.addEventListener("change", updateRect);
-
-        if (colorInput) {
-            colorInput.addEventListener("change", function () {
-                layer.color = this.value;
-                render();
-                renderControlPanel();
             });
         }
     }
@@ -635,6 +587,61 @@
         }
     }
 
+    function updateCursorOnHover(clientX, clientY) {
+        if (state.tool !== "select" || state.isPanning || state.isDraggingLayer) return;
+        
+        var pt = clientToCanvas(clientX, clientY);
+        var selectedLayer = state.selectedLayerId ? findLayerById(state.selectedLayerId) : null;
+        
+        // Helper function to remove all cursor classes
+        function removeAllCursorClasses() {
+            interactionCanvas.classList.remove("grab", "grabbing", "crosshair", "move", 
+                "nwse-resize", "ns-resize", "nesw-resize", "ew-resize");
+        }
+        
+        if (selectedLayer && selectedLayer.type === LAYER_TYPES.RECTANGLE) {
+            var handleIndex = getResizeHandleAt(pt.x, pt.y, selectedLayer);
+            if (handleIndex !== null) {
+                // Set cursor based on handle position
+                var cursorClass = "default";
+                switch (handleIndex) {
+                    case 0: // top-left
+                    case 7: // bottom-right
+                        cursorClass = "nwse-resize";
+                        break;
+                    case 1: // top-center
+                    case 6: // bottom-center
+                        cursorClass = "ns-resize";
+                        break;
+                    case 2: // top-right
+                    case 5: // bottom-left
+                        cursorClass = "nesw-resize";
+                        break;
+                    case 3: // middle-left
+                    case 4: // middle-right
+                        cursorClass = "ew-resize";
+                        break;
+                }
+                removeAllCursorClasses();
+                interactionCanvas.classList.add(cursorClass);
+                return;
+            }
+            
+            // Check if inside the rectangle (for moving)
+            var data = selectedLayer.data;
+            if (pt.x >= data.x && pt.x <= data.x + data.width &&
+                pt.y >= data.y && pt.y <= data.y + data.height) {
+                removeAllCursorClasses();
+                interactionCanvas.classList.add("move");
+                return;
+            }
+        }
+        
+        // Default cursor for select tool
+        removeAllCursorClasses();
+        interactionCanvas.classList.add("grab");
+    }
+
     // ── Toolbar Event Handlers ────────────────────────────────────
 
     // Toolbar buttons
@@ -705,10 +712,40 @@
         var pt = clientToCanvas(e.clientX, e.clientY);
 
         if (state.tool === "select") {
+            // Check if clicking on a resize handle
+            var selectedLayer = state.selectedLayerId ? findLayerById(state.selectedLayerId) : null;
+            if (selectedLayer && selectedLayer.type === LAYER_TYPES.RECTANGLE) {
+                state.resizeHandle = getResizeHandleAt(pt.x, pt.y, selectedLayer);
+                if (state.resizeHandle !== null) {
+                    // Start resizing
+                    state.isDraggingLayer = true;
+                    state.dragStartX = pt.x;
+                    state.dragStartY = pt.y;
+                    state.dragStartData = {
+                        x: selectedLayer.data.x,
+                        y: selectedLayer.data.y,
+                        width: selectedLayer.data.width,
+                        height: selectedLayer.data.height
+                    };
+                    return;
+                }
+            }
+
             // Check if clicking on a layer
             var hitLayer = findLayerAt(pt.x, pt.y);
             if (hitLayer) {
                 selectLayer(hitLayer.id);
+                
+                // Start dragging the layer
+                state.isDraggingLayer = true;
+                state.dragStartX = pt.x;
+                state.dragStartY = pt.y;
+                state.dragStartData = {
+                    x: hitLayer.data.x,
+                    y: hitLayer.data.y,
+                    width: hitLayer.data.width,
+                    height: hitLayer.data.height
+                };
             } else {
                 // Start panning
                 state.isPanning = true;
@@ -748,6 +785,39 @@
             return;
         }
 
+        if (state.isDraggingLayer && state.selectedLayerId) {
+            var pt = clientToCanvas(e.clientX, e.clientY);
+            var layer = findLayerById(state.selectedLayerId);
+            
+            if (layer && layer.type === LAYER_TYPES.RECTANGLE) {
+                var dx = pt.x - state.dragStartX;
+                var dy = pt.y - state.dragStartY;
+                
+                if (state.resizeHandle !== null) {
+                    // Resize the rectangle based on which handle is being dragged
+                    var newData = resizeRectangle(
+                        state.dragStartData, 
+                        state.resizeHandle, 
+                        dx, dy
+                    );
+                    
+                    // Update layer data
+                    layer.data.x = newData.x;
+                    layer.data.y = newData.y;
+                    layer.data.width = newData.width;
+                    layer.data.height = newData.height;
+                } else {
+                    // Move the rectangle
+                    layer.data.x = state.dragStartData.x + dx;
+                    layer.data.y = state.dragStartData.y + dy;
+                }
+                
+                render();
+                renderControlPanel();
+            }
+            return;
+        }
+
         if (state.isDrawing && state.tool === "rect") {
             // Draw preview rectangle
             var pt = clientToCanvas(e.clientX, e.clientY);
@@ -771,6 +841,9 @@
             interCtx.restore();
         }
 
+        // Update cursor based on hover state
+        updateCursorOnHover(e.clientX, e.clientY);
+
         // Tooltip
         var pt = clientToCanvas(e.clientX, e.clientY);
         var hitLayer = findLayerAt(pt.x, pt.y);
@@ -791,6 +864,8 @@
         if (state.isPanning) {
             state.isPanning = false;
             updateCursor();
+            // Update cursor based on current mouse position after panning
+            updateCursorOnHover(e.clientX, e.clientY);
 
             if (!state.didDrag) {
                 // Click without drag - deselect
@@ -802,6 +877,15 @@
                     renderControlPanel();
                 }
             }
+        }
+
+        if (state.isDraggingLayer) {
+            state.isDraggingLayer = false;
+            state.resizeHandle = null;
+            state.dragStartData = null;
+            updateCursor();
+            // Update cursor based on current mouse position after dragging
+            updateCursorOnHover(e.clientX, e.clientY);
         }
 
         if (state.isDrawing && state.tool === "rect") {
@@ -818,8 +902,19 @@
             } else {
                 render(); // Clear preview
             }
+            // Update cursor after drawing
+            updateCursorOnHover(e.clientX, e.clientY);
         }
     });
+
+    function findLayerById(id) {
+        for (var i = 0; i < state.layers.length; i++) {
+            if (state.layers[i].id === id) {
+                return state.layers[i];
+            }
+        }
+        return null;
+    }
 
     function findLayerAt(x, y) {
         // Check layers in reverse order (topmost first)
@@ -850,6 +945,101 @@
             }
         }
         return null;
+    }
+
+    function getResizeHandleAt(x, y, layer) {
+        if (!layer || layer.type !== LAYER_TYPES.RECTANGLE) return null;
+        
+        var data = layer.data;
+        var handleSize = 8 / state.zoom;
+        var handleHalfSize = handleSize / 2;
+        
+        var handles = [
+            { x: data.x, y: data.y },                           // top-left
+            { x: data.x + data.width / 2, y: data.y },          // top-center
+            { x: data.x + data.width, y: data.y },              // top-right
+            { x: data.x, y: data.y + data.height / 2 },         // middle-left
+            { x: data.x + data.width, y: data.y + data.height / 2 }, // middle-right
+            { x: data.x, y: data.y + data.height },             // bottom-left
+            { x: data.x + data.width / 2, y: data.y + data.height }, // bottom-center
+            { x: data.x + data.width, y: data.y + data.height } // bottom-right
+        ];
+        
+        for (var i = 0; i < handles.length; i++) {
+            var hx = handles[i].x;
+            var hy = handles[i].y;
+            if (x >= hx - handleHalfSize && x <= hx + handleHalfSize &&
+                y >= hy - handleHalfSize && y <= hy + handleHalfSize) {
+                return i;
+            }
+        }
+        return null;
+    }
+
+    function resizeRectangle(originalData, handleIndex, dx, dy) {
+        var result = {
+            x: originalData.x,
+            y: originalData.y,
+            width: originalData.width,
+            height: originalData.height
+        };
+        
+        // Minimum size constraint
+        var minSize = 10;
+        
+        switch (handleIndex) {
+            case 0: // top-left
+                result.x = originalData.x + dx;
+                result.y = originalData.y + dy;
+                result.width = originalData.width - dx;
+                result.height = originalData.height - dy;
+                break;
+            case 1: // top-center
+                result.y = originalData.y + dy;
+                result.height = originalData.height - dy;
+                break;
+            case 2: // top-right
+                result.y = originalData.y + dy;
+                result.width = originalData.width + dx;
+                result.height = originalData.height - dy;
+                break;
+            case 3: // middle-left
+                result.x = originalData.x + dx;
+                result.width = originalData.width - dx;
+                break;
+            case 4: // middle-right
+                result.width = originalData.width + dx;
+                break;
+            case 5: // bottom-left
+                result.x = originalData.x + dx;
+                result.width = originalData.width - dx;
+                result.height = originalData.height + dy;
+                break;
+            case 6: // bottom-center
+                result.height = originalData.height + dy;
+                break;
+            case 7: // bottom-right
+                result.width = originalData.width + dx;
+                result.height = originalData.height + dy;
+                break;
+        }
+        
+        // Ensure minimum size
+        if (result.width < minSize) {
+            if (handleIndex === 0 || handleIndex === 3 || handleIndex === 5) {
+                result.x = originalData.x + originalData.width - minSize;
+            }
+            result.width = minSize;
+        }
+        
+        if (result.height < minSize) {
+            if (handleIndex === 0 || handleIndex === 1 || handleIndex === 2) {
+                result.y = originalData.y + originalData.height - minSize;
+            }
+            result.height = minSize;
+        }
+        
+        return result;
     }
 
     // ── Wheel Zoom ─────────────────────────────────────────────────

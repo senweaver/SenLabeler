@@ -58,6 +58,22 @@
     cursor: move;
 }
 
+.layer-canvas-container .interaction-canvas.nwse-resize {
+    cursor: nwse-resize;
+}
+
+.layer-canvas-container .interaction-canvas.ns-resize {
+    cursor: ns-resize;
+}
+
+.layer-canvas-container .interaction-canvas.nesw-resize {
+    cursor: nesw-resize;
+}
+
+.layer-canvas-container .interaction-canvas.ew-resize {
+    cursor: ew-resize;
+}
+
 /* ── Loading Indicator ── */
 
 .layer-canvas-container .loading-indicator {
@@ -258,6 +274,26 @@
     justify-content: center;
     margin-right: 8px;
     color: var(--color-accent, #8ab4f8);
+}
+
+.layer-canvas-container .layer-color-picker {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid var(--border-color-primary, #3a3a3a);
+    border-radius: 3px;
+    cursor: pointer;
+    margin-right: 8px;
+    flex-shrink: 0;
+}
+
+.layer-canvas-container .layer-color-picker::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+
+.layer-canvas-container .layer-color-picker::-webkit-color-swatch {
+    border: none;
+    border-radius: 2px;
 }
 
 .layer-canvas-container .layer-name {
