@@ -59,7 +59,26 @@
         dragStartX: 0,
         dragStartY: 0,
         dragStartData: null,
-        resizeHandle: null    // null or handle index (0-7)
+        resizeHandle: null,   // null or handle index (0-7)
+        // Polygon drawing state
+        polygonPoints: [],    // Points for polygon being drawn
+        isDrawingPolygon: false,
+        editingPointIndex: null, // Index of point being edited in selected mask
+        hoveredPointIndex: null, // Index of hovered point for visual feedback
+        hoveredEdgeIndex: null,  // Index of hovered edge for adding points
+        polygonCloseThreshold: 15, // Pixels to consider closing polygon
+        // Polygon editing state
+        isDraggingPolygonMask: false, // Whether dragging entire polygon mask
+        dragPolygonStartData: null,    // Original points when starting drag
+        // Edge hover state for adding points
+        hoveredEdgeInfo: null,          // {edgeIndex, pointOnEdge} for visual feedback
+        // Selected vertex for keyboard operations
+        selectedPointIndex: null,      // Index of selected point for deletion
+        // Context menu state
+        contextMenuVisible: false,
+        contextMenuX: 0,
+        contextMenuY: 0,
+        contextMenuPointIndex: null    // Point index for context menu operations
     };
 
     // Layer types
@@ -310,6 +329,72 @@
         ctx.strokeStyle = color || "#ff6b6b";
         ctx.lineWidth = isSelected ? 3 / state.zoom : 2 / state.zoom;
         ctx.stroke();
+        
+        // Draw vertex handles when selected
+        if (isSelected && data.points.length >= 3) {
+            drawPolygonHandles(ctx, data.points, color);
+            // Draw edge hover indicator for adding points
+            if (state.hoveredEdgeInfo && state.tool === "mask") {
+                drawEdgeHoverIndicator(ctx, data.points, state.hoveredEdgeInfo);
+            }
+        }
+    }
+    
+    function drawPolygonHandles(ctx, points, color) {
+        var handleSize = 8 / state.zoom;
+        var halfSize = handleSize / 2;
+        
+        for (var i = 0; i < points.length; i++) {
+            var p = points[i];
+            var isHovered = state.hoveredPointIndex === i;
+            
+            // Draw handle
+            ctx.fillStyle = isHovered ? "#fff" : (color || "#ff6b6b");
+            ctx.strokeStyle = isHovered ? (color || "#ff6b6b") : "#fff";
+            ctx.lineWidth = 1.5 / state.zoom;
+            
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, halfSize, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+        }
+    }
+    
+    function drawEdgeHoverIndicator(ctx, points, edgeInfo) {
+        if (!edgeInfo || edgeInfo.edgeIndex === null) return;
+        
+        var i = edgeInfo.edgeIndex;
+        var p1 = points[i];
+        var p2 = points[(i + 1) % points.length];
+        
+        // Highlight the edge
+        ctx.strokeStyle = "#4a9eff";
+        ctx.lineWidth = 3 / state.zoom;
+        ctx.setLineDash([3 / state.zoom, 3 / state.zoom]);
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        // Draw a "+" symbol at the hovered position on the edge
+        var pt = edgeInfo.pointOnEdge;
+        var crossSize = 6 / state.zoom;
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 2 / state.zoom;
+        ctx.beginPath();
+        ctx.moveTo(pt.x - crossSize, pt.y);
+        ctx.lineTo(pt.x + crossSize, pt.y);
+        ctx.moveTo(pt.x, pt.y - crossSize);
+        ctx.lineTo(pt.x, pt.y + crossSize);
+        ctx.stroke();
+        
+        // Draw a circle around the "+" 
+        ctx.strokeStyle = "#4a9eff";
+        ctx.lineWidth = 1.5 / state.zoom;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, crossSize + 2 / state.zoom, 0, Math.PI * 2);
+        ctx.stroke();
     }
 
     function drawSelectionHighlight(ctx, layer) {
@@ -321,6 +406,9 @@
             var d = layer.data;
             ctx.strokeRect(d.x - 2/state.zoom, d.y - 2/state.zoom, 
                           d.width + 4/state.zoom, d.height + 4/state.zoom);
+            ctx.setLineDash([]);
+            // Draw resize handles for rectangle
+            drawResizeHandles(ctx, layer.data);
         } else if (layer.type === LAYER_TYPES.MASK) {
             if (layer.data.points && layer.data.points.length >= 3) {
                 ctx.beginPath();
@@ -331,13 +419,8 @@
                 ctx.closePath();
                 ctx.stroke();
             }
-        }
-
-        ctx.setLineDash([]);
-
-        // Draw resize handles for rectangle
-        if (layer.type === LAYER_TYPES.RECTANGLE) {
-            drawResizeHandles(ctx, layer.data);
+            ctx.setLineDash([]);
+            // Handles are drawn in drawMask for masks
         }
     }
 
@@ -544,6 +627,8 @@
         state.selectedLayerId = layer.id;
         render();
         renderControlPanel();
+        // Auto switch to select tool after adding layer
+        setTool("select");
         return layer;
     }
 
@@ -560,6 +645,8 @@
         state.selectedLayerId = layer.id;
         render();
         renderControlPanel();
+        // Auto switch to select tool after adding layer
+        setTool("select");
         return layer;
     }
 
@@ -588,7 +675,7 @@
     }
 
     function updateCursorOnHover(clientX, clientY) {
-        if (state.tool !== "select" || state.isPanning || state.isDraggingLayer) return;
+        if (state.isPanning || state.isDraggingLayer) return;
         
         var pt = clientToCanvas(clientX, clientY);
         var selectedLayer = state.selectedLayerId ? findLayerById(state.selectedLayerId) : null;
@@ -598,6 +685,34 @@
             interactionCanvas.classList.remove("grab", "grabbing", "crosshair", "move", 
                 "nwse-resize", "ns-resize", "nesw-resize", "ew-resize");
         }
+        
+        // Polygon mask editing cursor
+        if (state.tool === "mask") {
+            removeAllCursorClasses();
+            if (state.isDrawingPolygon) {
+                // Check if near first point for closing
+                if (state.polygonPoints.length >= 3) {
+                    var firstPoint = state.polygonPoints[0];
+                    var dist = Math.sqrt(Math.pow(pt.x - firstPoint.x, 2) + Math.pow(pt.y - firstPoint.y, 2));
+                    if (dist < state.polygonCloseThreshold / (state.scale * state.zoom)) {
+                        interactionCanvas.classList.add("pointer");
+                        return;
+                    }
+                }
+            }
+            // Check if hovering over polygon vertex handle
+            if (selectedLayer && selectedLayer.type === LAYER_TYPES.MASK && selectedLayer.data.points) {
+                var pointIndex = getPolygonPointAt(pt.x, pt.y, selectedLayer.data.points);
+                if (pointIndex !== null) {
+                    interactionCanvas.classList.add("move");
+                    return;
+                }
+            }
+            interactionCanvas.classList.add("crosshair");
+            return;
+        }
+        
+        if (state.tool !== "select") return;
         
         if (selectedLayer && selectedLayer.type === LAYER_TYPES.RECTANGLE) {
             var handleIndex = getResizeHandleAt(pt.x, pt.y, selectedLayer);
@@ -635,6 +750,24 @@
                 interactionCanvas.classList.add("move");
                 return;
             }
+        }
+        
+        // Check if hovering over polygon vertex handle for select tool
+        if (selectedLayer && selectedLayer.type === LAYER_TYPES.MASK && selectedLayer.data.points) {
+            var pointIndex = getPolygonPointAt(pt.x, pt.y, selectedLayer.data.points);
+            if (pointIndex !== null) {
+                removeAllCursorClasses();
+                interactionCanvas.classList.add("move");
+                return;
+            }
+        }
+        
+        // Check if hovering over any layer (for selecting)
+        var hoveredLayer = findLayerAt(pt.x, pt.y);
+        if (hoveredLayer) {
+            removeAllCursorClasses();
+            interactionCanvas.classList.add("pointer");
+            return;
         }
         
         // Default cursor for select tool
@@ -712,12 +845,31 @@
         var pt = clientToCanvas(e.clientX, e.clientY);
 
         if (state.tool === "select") {
-            // Check if clicking on a resize handle
             var selectedLayer = state.selectedLayerId ? findLayerById(state.selectedLayerId) : null;
+            
+            // Check if clicking on a polygon point handle (for editing mask vertices)
+            if (selectedLayer && selectedLayer.type === LAYER_TYPES.MASK && selectedLayer.data.points) {
+                var pointIndex = getPolygonPointAt(pt.x, pt.y, selectedLayer.data.points);
+                if (pointIndex !== null) {
+                    state.editingPointIndex = pointIndex;
+                    state.isDraggingLayer = true;
+                    state.dragStartX = pt.x;
+                    state.dragStartY = pt.y;
+                    state.dragStartData = JSON.parse(JSON.stringify(selectedLayer.data.points));
+                    return;
+                }
+                
+                // Check if clicking on an edge to add a point
+                if (state.hoveredEdgeInfo) {
+                    addPointToPolygonAtEdge(selectedLayer, state.hoveredEdgeInfo.edgeIndex, pt);
+                    return;
+                }
+            }
+            
+            // Check if clicking on a resize handle (for rectangles)
             if (selectedLayer && selectedLayer.type === LAYER_TYPES.RECTANGLE) {
                 state.resizeHandle = getResizeHandleAt(pt.x, pt.y, selectedLayer);
                 if (state.resizeHandle !== null) {
-                    // Start resizing
                     state.isDraggingLayer = true;
                     state.dragStartX = pt.x;
                     state.dragStartY = pt.y;
@@ -736,16 +888,26 @@
             if (hitLayer) {
                 selectLayer(hitLayer.id);
                 
-                // Start dragging the layer
-                state.isDraggingLayer = true;
-                state.dragStartX = pt.x;
-                state.dragStartY = pt.y;
-                state.dragStartData = {
-                    x: hitLayer.data.x,
-                    y: hitLayer.data.y,
-                    width: hitLayer.data.width,
-                    height: hitLayer.data.height
-                };
+                // Start dragging based on layer type
+                if (hitLayer.type === LAYER_TYPES.MASK) {
+                    // For masks, drag entire polygon
+                    state.isDraggingPolygonMask = true;
+                    state.isDraggingLayer = true;
+                    state.dragStartX = pt.x;
+                    state.dragStartY = pt.y;
+                    state.dragPolygonStartData = JSON.parse(JSON.stringify(hitLayer.data.points));
+                } else {
+                    // For rectangles, use existing drag logic
+                    state.isDraggingLayer = true;
+                    state.dragStartX = pt.x;
+                    state.dragStartY = pt.y;
+                    state.dragStartData = {
+                        x: hitLayer.data.x,
+                        y: hitLayer.data.y,
+                        width: hitLayer.data.width,
+                        height: hitLayer.data.height
+                    };
+                }
             } else {
                 // Start panning
                 state.isPanning = true;
@@ -760,9 +922,8 @@
             state.isDrawing = true;
             state.drawStart = pt;
         } else if (state.tool === "mask") {
-            // For mask, we would start a polygon drawing mode
-            // Simplified: just create a sample mask
-            alert("Mask drawing not fully implemented. Use rectangle tool instead.");
+            // Polygon drawing mode
+            handlePolygonMouseDown(pt);
         }
     });
 
@@ -814,6 +975,23 @@
                 
                 render();
                 renderControlPanel();
+            } else if (layer && layer.type === LAYER_TYPES.MASK) {
+                var dx = pt.x - state.dragStartX;
+                var dy = pt.y - state.dragStartY;
+                
+                if (state.editingPointIndex !== null) {
+                    // Drag a single vertex point
+                    layer.data.points[state.editingPointIndex].x = state.dragStartData[state.editingPointIndex].x + dx;
+                    layer.data.points[state.editingPointIndex].y = state.dragStartData[state.editingPointIndex].y + dy;
+                    render();
+                } else if (state.isDraggingPolygonMask && state.dragPolygonStartData) {
+                    // Drag entire polygon mask
+                    for (var i = 0; i < layer.data.points.length; i++) {
+                        layer.data.points[i].x = state.dragPolygonStartData[i].x + dx;
+                        layer.data.points[i].y = state.dragPolygonStartData[i].y + dy;
+                    }
+                    render();
+                }
             }
             return;
         }
@@ -839,6 +1017,11 @@
             interCtx.setLineDash([5 / state.zoom, 5 / state.zoom]);
             interCtx.strokeRect(x, y, w, h);
             interCtx.restore();
+        }
+
+        // Handle polygon drawing and editing
+        if (state.tool === "mask") {
+            handlePolygonMouseMove(clientToCanvas(e.clientX, e.clientY));
         }
 
         // Update cursor based on hover state
@@ -883,6 +1066,9 @@
             state.isDraggingLayer = false;
             state.resizeHandle = null;
             state.dragStartData = null;
+            state.editingPointIndex = null;
+            state.isDraggingPolygonMask = false;
+            state.dragPolygonStartData = null;
             updateCursor();
             // Update cursor based on current mouse position after dragging
             updateCursorOnHover(e.clientX, e.clientY);
@@ -904,6 +1090,23 @@
             }
             // Update cursor after drawing
             updateCursorOnHover(e.clientX, e.clientY);
+        }
+
+        // Handle polygon editing mouseup
+        if (state.tool === "mask") {
+            handlePolygonMouseUp(clientToCanvas(e.clientX, e.clientY));
+        }
+    });
+
+    // Double-click to complete polygon
+    interactionCanvas.addEventListener("dblclick", function (e) {
+        if (!state.image) return;
+        if (state.tool !== "mask") return;
+        
+        e.preventDefault();
+        
+        if (state.isDrawingPolygon && state.polygonPoints.length >= 3) {
+            finishPolygon();
         }
     });
 
@@ -928,17 +1131,9 @@
                     return layer;
                 }
             } else if (layer.type === LAYER_TYPES.MASK) {
-                // Simple bounding box check for masks
-                if (layer.data.points && layer.data.points.length > 0) {
-                    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-                    for (var j = 0; j < layer.data.points.length; j++) {
-                        var p = layer.data.points[j];
-                        minX = Math.min(minX, p.x);
-                        minY = Math.min(minY, p.y);
-                        maxX = Math.max(maxX, p.x);
-                        maxY = Math.max(maxY, p.y);
-                    }
-                    if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
+                // Polygon hit test for masks
+                if (layer.data.points && layer.data.points.length >= 3) {
+                    if (isPointInPolygon(x, y, layer.data.points)) {
                         return layer;
                     }
                 }
@@ -1040,6 +1235,349 @@
         }
         
         return result;
+    }
+
+    // ── Polygon Drawing and Editing Functions ───────────────────────
+
+    function handlePolygonMouseDown(pt) {
+        var selectedLayer = state.selectedLayerId ? findLayerById(state.selectedLayerId) : null;
+        
+        // Check if clicking on a polygon vertex handle (for editing existing polygon)
+        if (selectedLayer && selectedLayer.type === LAYER_TYPES.MASK && selectedLayer.data.points) {
+            var pointIndex = getPolygonPointAt(pt.x, pt.y, selectedLayer.data.points);
+            if (pointIndex !== null) {
+                // Start dragging the point
+                state.editingPointIndex = pointIndex;
+                state.isDraggingLayer = true;
+                state.dragStartX = pt.x;
+                state.dragStartY = pt.y;
+                state.dragStartData = JSON.parse(JSON.stringify(selectedLayer.data.points));
+                return;
+            }
+            
+            // Check if clicking on an edge to add a point
+            if (state.hoveredEdgeInfo) {
+                addPointToPolygonAtEdge(selectedLayer, state.hoveredEdgeInfo.edgeIndex, pt);
+                return;
+            }
+            
+            // Check if clicking inside the polygon (for moving entire polygon)
+            if (isPointInPolygon(pt.x, pt.y, selectedLayer.data.points)) {
+                state.isDraggingPolygonMask = true;
+                state.isDraggingLayer = true;
+                state.dragStartX = pt.x;
+                state.dragStartY = pt.y;
+                state.dragPolygonStartData = JSON.parse(JSON.stringify(selectedLayer.data.points));
+                return;
+            }
+        }
+        
+        // Check if clicking on any mask layer (to select it first)
+        var hitLayer = findLayerAt(pt.x, pt.y);
+        if (hitLayer && hitLayer.type === LAYER_TYPES.MASK) {
+            selectLayer(hitLayer.id);
+            // Start dragging the entire polygon
+            state.isDraggingPolygonMask = true;
+            state.isDraggingLayer = true;
+            state.dragStartX = pt.x;
+            state.dragStartY = pt.y;
+            state.dragPolygonStartData = JSON.parse(JSON.stringify(hitLayer.data.points));
+            return;
+        }
+        
+        // If already drawing a polygon, add a point
+        if (state.isDrawingPolygon) {
+            // Check if clicking near the first point to close the polygon
+            if (state.polygonPoints.length >= 3) {
+                var firstPoint = state.polygonPoints[0];
+                var dist = Math.sqrt(Math.pow(pt.x - firstPoint.x, 2) + Math.pow(pt.y - firstPoint.y, 2));
+                if (dist < state.polygonCloseThreshold / (state.scale * state.zoom)) {
+                    // Close the polygon
+                    finishPolygon();
+                    return;
+                }
+            }
+            // Add a new point
+            state.polygonPoints.push({ x: pt.x, y: pt.y });
+            render();
+        } else {
+            // Start a new polygon
+            state.isDrawingPolygon = true;
+            state.polygonPoints = [{ x: pt.x, y: pt.y }];
+            render();
+        }
+    }
+
+    function handlePolygonMouseMove(pt) {
+        // Update hovered point index for visual feedback
+        var selectedLayer = state.selectedLayerId ? findLayerById(state.selectedLayerId) : null;
+        if (selectedLayer && selectedLayer.type === LAYER_TYPES.MASK && selectedLayer.data.points) {
+            state.hoveredPointIndex = getPolygonPointAt(pt.x, pt.y, selectedLayer.data.points);
+            
+            // Update edge hover info if not hovering over a point
+            if (state.hoveredPointIndex === null && !state.isDraggingLayer) {
+                state.hoveredEdgeInfo = getPolygonEdgeAt(pt.x, pt.y, selectedLayer.data.points);
+            } else {
+                state.hoveredEdgeInfo = null;
+            }
+        } else {
+            state.hoveredPointIndex = null;
+            state.hoveredEdgeInfo = null;
+        }
+        
+        // Handle entire polygon dragging
+        if (state.isDraggingPolygonMask && state.dragPolygonStartData && selectedLayer) {
+            var dx = pt.x - state.dragStartX;
+            var dy = pt.y - state.dragStartY;
+            for (var i = 0; i < selectedLayer.data.points.length; i++) {
+                selectedLayer.data.points[i].x = state.dragPolygonStartData[i].x + dx;
+                selectedLayer.data.points[i].y = state.dragPolygonStartData[i].y + dy;
+            }
+            render();
+            return;
+        }
+        
+        // Handle point dragging
+        if (state.isDraggingLayer && state.editingPointIndex !== null && selectedLayer) {
+            var points = selectedLayer.data.points;
+            points[state.editingPointIndex].x = pt.x;
+            points[state.editingPointIndex].y = pt.y;
+            render();
+            return;
+        }
+        
+        // Draw polygon preview while drawing
+        if (state.isDrawingPolygon && state.polygonPoints.length > 0) {
+            render();
+            
+            // Draw preview line to current mouse position
+            interCtx.save();
+            interCtx.setTransform(
+                state.scale * state.zoom, 0, 0,
+                state.scale * state.zoom,
+                state.panX, state.panY
+            );
+            
+            // Draw existing polygon
+            interCtx.beginPath();
+            interCtx.moveTo(state.polygonPoints[0].x, state.polygonPoints[0].y);
+            for (var i = 1; i < state.polygonPoints.length; i++) {
+                interCtx.lineTo(state.polygonPoints[i].x, state.polygonPoints[i].y);
+            }
+            
+            // Draw line to current mouse position
+            interCtx.lineTo(pt.x, pt.y);
+            
+            // Draw preview line back to first point if close enough
+            if (state.polygonPoints.length >= 3) {
+                var firstPoint = state.polygonPoints[0];
+                var dist = Math.sqrt(Math.pow(pt.x - firstPoint.x, 2) + Math.pow(pt.y - firstPoint.y, 2));
+                if (dist < state.polygonCloseThreshold / (state.scale * state.zoom)) {
+                    interCtx.lineTo(firstPoint.x, firstPoint.y);
+                    interCtx.fillStyle = "rgba(74, 158, 255, 0.2)";
+                    interCtx.fill();
+                }
+            }
+            
+            interCtx.strokeStyle = "#4a9eff";
+            interCtx.lineWidth = 2 / state.zoom;
+            interCtx.setLineDash([5 / state.zoom, 5 / state.zoom]);
+            interCtx.stroke();
+            
+            // Draw points
+            var handleSize = 8 / state.zoom;
+            interCtx.fillStyle = "#4a9eff";
+            for (var i = 0; i < state.polygonPoints.length; i++) {
+                interCtx.beginPath();
+                interCtx.arc(state.polygonPoints[i].x, state.polygonPoints[i].y, handleSize / 2, 0, Math.PI * 2);
+                interCtx.fill();
+            }
+            
+            interCtx.restore();
+        }
+    }
+
+    function handlePolygonMouseUp(pt) {
+        if (state.isDraggingPolygonMask) {
+            state.isDraggingPolygonMask = false;
+            state.isDraggingLayer = false;
+            state.dragPolygonStartData = null;
+            render();
+            return;
+        }
+        
+        if (state.isDraggingLayer && state.editingPointIndex !== null) {
+            state.isDraggingLayer = false;
+            state.editingPointIndex = null;
+            state.dragStartData = null;
+            render();
+        }
+    }
+
+    function finishPolygon() {
+        if (state.polygonPoints.length >= 3) {
+            addMask(state.polygonPoints.slice());
+        }
+        state.isDrawingPolygon = false;
+        state.polygonPoints = [];
+        render();
+    }
+
+    function cancelPolygon() {
+        state.isDrawingPolygon = false;
+        state.polygonPoints = [];
+        render();
+    }
+
+    function getPolygonPointAt(x, y, points) {
+        var handleSize = 12 / state.zoom; // Slightly larger for easier selection
+        for (var i = 0; i < points.length; i++) {
+            var dist = Math.sqrt(Math.pow(x - points[i].x, 2) + Math.pow(y - points[i].y, 2));
+            if (dist < handleSize) {
+                return i;
+            }
+        }
+        return null;
+    }
+
+    function isPointInPolygon(x, y, points) {
+        var inside = false;
+        for (var i = 0, j = points.length - 1; i < points.length; j = i++) {
+            var xi = points[i].x, yi = points[i].y;
+            var xj = points[j].x, yj = points[j].y;
+            
+            var intersect = ((yi > y) !== (yj > y)) &&
+                (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+            if (intersect) inside = !inside;
+        }
+        return inside;
+    }
+
+    function addPointToPolygon(layer, x, y) {
+        if (!layer || layer.type !== LAYER_TYPES.MASK || !layer.data.points) return;
+        
+        var points = layer.data.points;
+        var insertIndex = points.length;
+        
+        // Find the closest edge to insert the point
+        var minDist = Infinity;
+        for (var i = 0; i < points.length; i++) {
+            var j = (i + 1) % points.length;
+            var dist = pointToLineDistance(x, y, points[i], points[j]);
+            if (dist < minDist) {
+                minDist = dist;
+                insertIndex = j;
+            }
+        }
+        
+        // Insert the new point
+        points.splice(insertIndex, 0, { x: x, y: y });
+        render();
+        renderControlPanel();
+    }
+
+    function addPointToPolygonAtEdge(layer, edgeIndex, pt) {
+        if (!layer || layer.type !== LAYER_TYPES.MASK || !layer.data.points) return;
+        
+        var points = layer.data.points;
+        var insertIndex = (edgeIndex + 1) % points.length;
+        
+        // Calculate the point on the edge
+        var p1 = points[edgeIndex];
+        var p2 = points[(edgeIndex + 1) % points.length];
+        var newPoint = projectPointOnLine(pt.x, pt.y, p1, p2);
+        
+        // Insert the new point
+        points.splice(insertIndex, 0, newPoint);
+        state.hoveredEdgeInfo = null;
+        render();
+        renderControlPanel();
+    }
+
+    function removePointFromPolygon(layer, index) {
+        if (!layer || layer.type !== LAYER_TYPES.MASK || !layer.data.points) return;
+        if (layer.data.points.length <= 3) return; // Minimum 3 points for a polygon
+        
+        layer.data.points.splice(index, 1);
+        render();
+        renderControlPanel();
+    }
+
+    function getPolygonEdgeAt(x, y, points) {
+        var threshold = 8 / state.zoom;
+        var minDist = Infinity;
+        var result = null;
+        
+        for (var i = 0; i < points.length; i++) {
+            var j = (i + 1) % points.length;
+            var dist = pointToLineDistance(x, y, points[i], points[j]);
+            if (dist < threshold && dist < minDist) {
+                // Check if the point is within the edge segment
+                var projection = projectPointOnLine(x, y, points[i], points[j]);
+                var segLength = Math.sqrt(
+                    Math.pow(points[j].x - points[i].x, 2) + 
+                    Math.pow(points[j].y - points[i].y, 2)
+                );
+                var distFromP1 = Math.sqrt(
+                    Math.pow(projection.x - points[i].x, 2) + 
+                    Math.pow(projection.y - points[i].y, 2)
+                );
+                
+                // Only consider points within the edge segment (with small margin)
+                if (distFromP1 >= -threshold && distFromP1 <= segLength + threshold) {
+                    minDist = dist;
+                    result = { edgeIndex: i, pointOnEdge: projection };
+                }
+            }
+        }
+        return result;
+    }
+
+    function projectPointOnLine(px, py, p1, p2) {
+        var A = px - p1.x;
+        var B = py - p1.y;
+        var C = p2.x - p1.x;
+        var D = p2.y - p1.y;
+        
+        var dot = A * C + B * D;
+        var lenSq = C * C + D * D;
+        var param = lenSq !== 0 ? dot / lenSq : 0;
+        
+        // Clamp param to [0, 1] to stay on the segment
+        param = Math.max(0, Math.min(1, param));
+        
+        return {
+            x: p1.x + param * C,
+            y: p1.y + param * D
+        };
+    }
+
+    function pointToLineDistance(px, py, p1, p2) {
+        var A = px - p1.x;
+        var B = py - p1.y;
+        var C = p2.x - p1.x;
+        var D = p2.y - p1.y;
+        
+        var dot = A * C + B * D;
+        var lenSq = C * C + D * D;
+        var param = lenSq !== 0 ? dot / lenSq : -1;
+        
+        var xx, yy;
+        
+        if (param < 0) {
+            xx = p1.x;
+            yy = p1.y;
+        } else if (param > 1) {
+            xx = p2.x;
+            yy = p2.y;
+        } else {
+            xx = p1.x + param * C;
+            yy = p1.y + param * D;
+        }
+        
+        var dx = px - xx;
+        var dy = py - yy;
+        return Math.sqrt(dx * dx + dy * dy);
     }
 
     // ── Wheel Zoom ─────────────────────────────────────────────────
@@ -1197,16 +1735,36 @@
                 break;
             case "Delete":
             case "Backspace":
-                if (state.selectedLayerId != null) {
+                // If hovering over a polygon point, delete just that point
+                if (state.hoveredPointIndex !== null && state.selectedLayerId !== null) {
+                    var layer = findLayerById(state.selectedLayerId);
+                    if (layer && layer.type === LAYER_TYPES.MASK && layer.data.points) {
+                        removePointFromPolygon(layer, state.hoveredPointIndex);
+                        state.hoveredPointIndex = null;
+                    }
+                } else if (state.selectedLayerId != null) {
                     deleteLayer(state.selectedLayerId);
                 }
                 e.preventDefault();
                 break;
             case "Escape":
+                // Cancel polygon drawing if in progress
+                if (state.isDrawingPolygon) {
+                    state.isDrawingPolygon = false;
+                    state.polygonPoints = [];
+                    state.hoveredPointIndex = null;
+                }
                 state.selectedLayerId = null;
                 state.isDrawing = false;
                 render();
                 renderControlPanel();
+                e.preventDefault();
+                break;
+            case "Enter":
+                // Complete polygon if in drawing mode
+                if (state.isDrawingPolygon && state.polygonPoints.length >= 3) {
+                    completePolygon();
+                }
                 e.preventDefault();
                 break;
             case "+":
