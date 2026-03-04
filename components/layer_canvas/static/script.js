@@ -1,1240 +1,1051 @@
-/**
- * LayerCanvas - Multi-layer Canvas Component
- * Supports background image, rectangle layers, and mask layers
- */
+(function () {
+    "use strict";
 
-class LayerCanvas {
-    constructor(options = {}) {
-        // Configuration
-        this.container = options.container || document.getElementById('app');
-        this.height = options.height || 500;
-        this.width = options.width || null;
-        this.showControls = options.showControls !== false;
-        this.editable = options.editable !== false;
-        this.minZoom = options.minZoom || 0.1;
-        this.maxZoom = options.maxZoom || 10;
-        this.backgroundColor = options.backgroundColor || '#1a1a1a';
-        
-        // State
-        this.layers = [];
-        this.backgroundImage = null;
-        this.selectedLayerId = null;
-        this.loading = false;
-        this.tooltip = null;
-        this.showGrid = false;
-        
-        // View state
-        this.zoom = 1;
-        this.panX = 0;
-        this.panY = 0;
-        this.minPanX = 0;
-        this.maxPanX = 0;
-        this.minPanY = 0;
-        this.maxPanY = 0;
-        
-        // Interaction state
-        this.isDragging = false;
-        this.isPanning = false;
-        this.isResizing = false;
-        this.isDrawing = false;
-        this.dragStart = { x: 0, y: 0 };
-        this.activeHandle = null;
-        this.currentTool = 'select'; // 'select', 'rect', 'mask', 'pan'
-        
-        // Canvas references
-        this.mainCanvas = null;
-        this.mainCtx = null;
-        this.interactionCanvas = null;
-        this.interactionCtx = null;
-        this.canvasWidth = 0;
-        this.canvasHeight = 0;
-        
-        // Image state
-        this.imageLoaded = false;
-        this.imageElement = null;
-        this.imageWidth = 0;
-        this.imageHeight = 0;
-        
-        // Event callbacks
-        this.onLayerChange = options.onLayerChange || null;
-        this.onSelectionChange = options.onSelectionChange || null;
-        this.onViewChange = options.onViewChange || null;
-        
-        // Drag state for layer reordering
-        this.draggedLayerIndex = null;
-        
-        // Initialize
-        this.init();
-    }
+    // ── Constants ─────────────────────────────────────────────────
+
+    var MIN_ZOOM = 0.5;
+    var MAX_ZOOM = 10;
+    var ZOOM_SENSITIVITY = 0.001;
+    var DRAG_THRESHOLD = 4;
+
+    // ── DOM References ─────────────────────────────────────────────
+
+    var container = element.querySelector(".layer-canvas-container");
+    var dataScript = element.querySelector("script.layer-canvas-data");
+    var canvasWrapper = element.querySelector(".canvas-wrapper");
+    var mainCanvas = element.querySelector(".main-canvas");
+    var interactionCanvas = element.querySelector(".interaction-canvas");
+    var mainCtx = mainCanvas.getContext("2d");
+    var interCtx = interactionCanvas.getContext("2d");
+    var tooltip = element.querySelector(".tooltip");
+    var controlPanel = element.querySelector(".control-panel");
+    var layerList = element.querySelector(".layer-list");
+    var layerProperties = element.querySelector(".layer-properties");
+    var loadingIndicator = element.querySelector(".loading-indicator");
+    var placeholder = element.querySelector(".placeholder");
+
+    // Toolbar buttons - match template classes
+    var selectBtn = element.querySelector(".select-tool");
+    var rectBtn = element.querySelector(".rect-tool");
+    var maskBtn = element.querySelector(".mask-tool");
     
-    /**
-     * Initialize the canvas component
-     */
-    init() {
-        this.setupCanvas();
-        this.setupEventListeners();
-        this.render();
-    }
+    // Control panel buttons
+    var addRectBtn = element.querySelector(".add-rect-btn");
+    var addMaskBtn = element.querySelector(".add-mask-btn");
+    var clearAllBtn = element.querySelector(".clear-all-btn");
+    var zoomInBtn = element.querySelector(".zoom-in-btn");
+    var zoomOutBtn = element.querySelector(".zoom-out-btn");
+    var resetViewBtn = element.querySelector(".reset-view-btn");
+    var exportJsonBtn = element.querySelector(".export-json-btn");
     
-    /**
-     * Setup canvas elements
-     */
-    setupCanvas() {
-        // Find or create canvas elements
-        const wrapper = this.container.querySelector('.canvas-wrapper');
-        if (!wrapper) {
-            console.error('Canvas wrapper not found');
+    // Additional controls (optional - may not exist in template)
+    var opacitySlider = element.querySelector(".opacity-slider");
+
+    // ── State ──────────────────────────────────────────────────────
+
+    var state = {
+        image: null,
+        layers: [],           // Array of layer objects: { id, type, name, visible, data }
+        scale: 1,             // Canvas scale relative to image
+        zoom: 1,              // User zoom level
+        panX: 0,
+        panY: 0,
+        isPanning: false,
+        panStartX: 0,
+        panStartY: 0,
+        panStartPanX: 0,
+        panStartPanY: 0,
+        didDrag: false,
+        tool: "select",       // 'select', 'rect', 'mask'
+        selectedLayerId: null,
+        isDrawing: false,
+        drawStart: null,      // { x, y } in canvas coordinates
+        nextLayerId: 1
+    };
+
+    // Layer types
+    var LAYER_TYPES = {
+        RECTANGLE: "rectangle",
+        MASK: "mask"
+    };
+
+    // ── MutationObserver for value changes ─────────────────────────
+
+    var observer = new MutationObserver(function () {
+        handleValueChange();
+    });
+    observer.observe(dataScript, { childList: true, characterData: true, subtree: true });
+
+    // Also handle initial value
+    handleValueChange();
+
+    // ── Value Change Handler ───────────────────────────────────────
+
+    function handleValueChange() {
+        var raw = dataScript.textContent.trim();
+        if (!raw || raw === "null") {
+            showPlaceholder();
             return;
         }
-        
-        this.mainCanvas = wrapper.querySelector('#mainCanvas');
-        this.interactionCanvas = wrapper.querySelector('#interactionCanvas');
-        
-        if (!this.mainCanvas || !this.interactionCanvas) {
-            console.error('Canvas elements not found');
+
+        var data;
+        try {
+            data = JSON.parse(raw);
+        } catch (e) {
+            showPlaceholder();
             return;
         }
-        
-        this.mainCtx = this.mainCanvas.getContext('2d');
-        this.interactionCtx = this.interactionCanvas.getContext('2d');
-        
-        this.resizeCanvas();
-    }
-    
-    /**
-     * Resize canvas to fit container
-     */
-    resizeCanvas() {
-        const wrapper = this.mainCanvas.parentElement;
-        const rect = wrapper.getBoundingClientRect();
-        
-        this.canvasWidth = this.width || rect.width;
-        this.canvasHeight = this.height || rect.height;
-        
-        // Set canvas size
-        this.mainCanvas.width = this.canvasWidth;
-        this.mainCanvas.height = this.canvasHeight;
-        this.interactionCanvas.width = this.canvasWidth;
-        this.interactionCanvas.height = this.canvasHeight;
-        
-        this.render();
-    }
-    
-    /**
-     * Setup event listeners
-     */
-    setupEventListeners() {
-        // Window resize
-        window.addEventListener('resize', () => this.resizeCanvas());
-        
-        // Mouse events on interaction canvas
-        this.interactionCanvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
-        this.interactionCanvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
-        this.interactionCanvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
-        this.interactionCanvas.addEventListener('mouseleave', (e) => this.handleMouseUp(e));
-        this.interactionCanvas.addEventListener('wheel', (e) => this.handleWheel(e));
-        this.interactionCanvas.addEventListener('contextmenu', (e) => this.handleContextMenu(e));
-        
-        // Double click for quick select
-        this.interactionCanvas.addEventListener('dblclick', (e) => this.handleDoubleClick(e));
-        
-        // Keyboard events
-        document.addEventListener('keydown', (e) => this.handleKeyDown(e));
-        document.addEventListener('keyup', (e) => this.handleKeyUp(e));
-        
-        // Touch events for mobile
-        this.interactionCanvas.addEventListener('touchstart', (e) => this.handleTouchStart(e));
-        this.interactionCanvas.addEventListener('touchmove', (e) => this.handleTouchMove(e));
-        this.interactionCanvas.addEventListener('touchend', (e) => this.handleTouchEnd(e));
-    }
-    
-    /**
-     * Handle mouse down event
-     */
-    handleMouseDown(e) {
-        const point = this.getCanvasPoint(e);
-        this.dragStart = { x: e.clientX, y: e.clientY };
-        
-        if (e.button === 1 || (e.button === 0 && this.currentTool === 'pan')) {
-            // Middle click or pan tool - start panning
-            this.isPanning = true;
-            this.interactionCanvas.classList.add('grabbing');
+
+        if (!data || !data.image) {
+            showPlaceholder();
             return;
         }
-        
-        if (e.button === 0) {
-            // Left click
-            if (this.currentTool === 'rect') {
-                this.isDrawing = true;
-                this.drawingStart = point;
-                this.drawingLayer = this.createRectLayer(point.x, point.y, 0, 0);
-                this.addLayer(this.drawingLayer);
-                this.selectLayer(this.drawingLayer.id);
-            } else if (this.currentTool === 'mask') {
-                this.isDrawing = true;
-                this.drawingStart = point;
-                this.drawingLayer = this.createMaskLayer(point.x, point.y, 0, 0);
-                this.addLayer(this.drawingLayer);
-                this.selectLayer(this.drawingLayer.id);
-            } else {
-                // Select tool
-                const hitResult = this.hitTest(point);
-                
-                if (hitResult) {
-                    if (hitResult.handle) {
-                        // Resize handle
-                        this.isResizing = true;
-                        this.activeHandle = hitResult.handle;
-                        this.resizeStart = point;
-                        this.originalRect = { ...hitResult.layer };
-                    } else {
-                        // Layer hit
-                        this.isDragging = true;
-                        this.dragOffset = {
-                            x: point.x - hitResult.layer.x,
-                            y: point.y - hitResult.layer.y
-                        };
-                        this.selectLayer(hitResult.layer.id);
-                    }
-                } else {
-                    // Background hit - deselect
-                    this.selectLayer(null);
+
+        showLoading();
+
+        var img = new Image();
+        img.onload = function () {
+            state.image = img;
+            // Load existing layers if provided
+            state.layers = data.layers || [];
+            // Assign IDs to layers without them
+            for (var i = 0; i < state.layers.length; i++) {
+                if (!state.layers[i].id) {
+                    state.layers[i].id = state.nextLayerId++;
                 }
             }
-        }
-    }
-    
-    /**
-     * Handle mouse move event
-     */
-    handleMouseMove(e) {
-        const point = this.getCanvasPoint(e);
-        
-        if (this.isPanning) {
-            const dx = e.clientX - this.dragStart.x;
-            const dy = e.clientY - this.dragStart.y;
-            this.panX += dx;
-            this.panY += dy;
-            this.dragStart = { x: e.clientX, y: e.clientY };
-            this.render();
-            return;
-        }
-        
-        if (this.isDrawing && this.drawingLayer) {
-            // Update drawing layer size
-            const x = Math.min(this.drawingStart.x, point.x);
-            const y = Math.min(this.drawingStart.y, point.y);
-            const width = Math.abs(point.x - this.drawingStart.x);
-            const height = Math.abs(point.y - this.drawingStart.y);
-            
-            this.drawingLayer.x = x;
-            this.drawingLayer.y = y;
-            this.drawingLayer.width = width;
-            this.drawingLayer.height = height;
-            
-            if (this.drawingLayer.type === 'mask' && this.drawingLayer.regions) {
-                this.drawingLayer.regions[0] = {
-                    type: 'rect',
-                    x, y, width, height
-                };
-            }
-            
-            this.render();
-            return;
-        }
-        
-        if (this.isDragging && this.selectedLayerId) {
-            const layer = this.getLayerById(this.selectedLayerId);
-            if (layer) {
-                layer.x = point.x - this.dragOffset.x;
-                layer.y = point.y - this.dragOffset.y;
-                
-                if (layer.type === 'mask' && layer.regions && layer.regions.length > 0) {
-                    const region = layer.regions[0];
-                    region.x = layer.x;
-                    region.y = layer.y;
-                }
-                
-                this.render();
-                this.emitLayerChange();
-            }
-            return;
-        }
-        
-        if (this.isResizing && this.selectedLayerId) {
-            this.resizeLayer(point);
-            return;
-        }
-        
-        // Update cursor based on hit test
-        const hitResult = this.hitTest(point);
-        this.updateCursor(hitResult);
-        
-        // Show tooltip
-        if (hitResult && hitResult.layer) {
-            this.showTooltip(e.clientX, e.clientY, hitResult.layer.name);
-        } else {
-            this.hideTooltip();
-        }
-    }
-    
-    /**
-     * Handle mouse up event
-     */
-    handleMouseUp(e) {
-        if (this.isDrawing) {
-            // Finalize drawing
-            if (this.drawingLayer && this.drawingLayer.width < 5 && this.drawingLayer.height < 5) {
-                // Too small - remove
-                this.removeLayer(this.drawingLayer.id);
-            }
-            this.drawingLayer = null;
-            this.emitLayerChange();
-        }
-        
-        this.isPanning = false;
-        this.isDragging = false;
-        this.isResizing = false;
-        this.isDrawing = false;
-        this.activeHandle = null;
-        this.interactionCanvas.classList.remove('grabbing');
-    }
-    
-    /**
-     * Handle wheel event for zoom
-     */
-    handleWheel(e) {
-        e.preventDefault();
-        
-        const point = this.getCanvasPoint(e);
-        const delta = e.deltaY > 0 ? 0.9 : 1.1;
-        const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom * delta));
-        
-        if (newZoom !== this.zoom) {
-            // Zoom towards cursor
-            const zoomRatio = newZoom / this.zoom;
-            this.panX = point.x - (point.x - this.panX) * zoomRatio;
-            this.panY = point.y - (point.y - this.panY) * zoomRatio;
-            this.zoom = newZoom;
-            this.render();
-            this.emitViewChange();
-        }
-    }
-    
-    /**
-     * Handle context menu
-     */
-    handleContextMenu(e) {
-        e.preventDefault();
-        // Could show context menu here
-    }
-    
-    /**
-     * Handle double click
-     */
-    handleDoubleClick(e) {
-        const point = this.getCanvasPoint(e);
-        const hitResult = this.hitTest(point);
-        
-        if (hitResult && hitResult.layer) {
-            // Enter edit mode or show properties
-            console.log('Edit layer:', hitResult.layer.name);
-        }
-    }
-    
-    /**
-     * Handle keyboard events
-     */
-    handleKeyDown(e) {
-        // Tool shortcuts
-        if (e.key === 'v' || e.key === 'V') {
-            this.setTool('select');
-        } else if (e.key === 'r' || e.key === 'R') {
-            this.setTool('rect');
-        } else if (e.key === 'm' || e.key === 'M') {
-            this.setTool('mask');
-        } else if (e.key === ' ') {
-            e.preventDefault();
-            this.setTool('pan');
-        }
-        
-        // Delete selected layer
-        if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedLayerId) {
-            this.removeLayer(this.selectedLayerId);
-            this.selectLayer(null);
-        }
-        
-        // Escape - deselect or cancel
-        if (e.key === 'Escape') {
-            if (this.isDrawing || this.isDragging || this.isResizing) {
-                this.isDrawing = false;
-                this.isDragging = false;
-                this.isResizing = false;
-            } else {
-                this.selectLayer(null);
-            }
-        }
-        
-        // Arrow keys to move selected layer
-        if (this.selectedLayerId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-            e.preventDefault();
-            const layer = this.getLayerById(this.selectedLayerId);
-            if (layer) {
-                const step = e.shiftKey ? 10 : 1;
-                switch (e.key) {
-                    case 'ArrowUp': layer.y -= step; break;
-                    case 'ArrowDown': layer.y += step; break;
-                    case 'ArrowLeft': layer.x -= step; break;
-                    case 'ArrowRight': layer.x += step; break;
-                }
-                this.render();
-                this.emitLayerChange();
-            }
-        }
-    }
-    
-    handleKeyUp(e) {
-        if (e.key === ' ') {
-            this.setTool('select');
-        }
-    }
-    
-    /**
-     * Touch event handlers
-     */
-    handleTouchStart(e) {
-        if (e.touches.length === 1) {
-            const touch = e.touches[0];
-            this.handleMouseDown({ 
-                clientX: touch.clientX, 
-                clientY: touch.clientY, 
-                button: 0 
+            state.selectedLayerId = null;
+
+            showContent();
+            requestAnimationFrame(function () {
+                fitCanvas();
+                resetView();
+                render();
+                renderControlPanel();
             });
-        } else if (e.touches.length === 2) {
-            // Pinch to zoom
-            this.isPinching = true;
-            const t1 = e.touches[0];
-            const t2 = e.touches[1];
-            this.pinchStartDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-        }
+        };
+        img.src = data.image;
     }
-    
-    handleTouchMove(e) {
-        e.preventDefault();
-        if (e.touches.length === 1) {
-            const touch = e.touches[0];
-            this.handleMouseMove({ 
-                clientX: touch.clientX, 
-                clientY: touch.clientY 
-            });
-        } else if (e.touches.length === 2 && this.isPinching) {
-            const t1 = e.touches[0];
-            const t2 = e.touches[1];
-            const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-            const scale = dist / this.pinchStartDist;
-            this.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom * scale));
-            this.pinchStartDist = dist;
-            this.render();
-        }
+
+    // ── Display States: placeholder / loading / content ──────────
+
+    function showPlaceholder() {
+        state.image = null;
+        state.layers = [];
+        state.selectedLayerId = null;
+        canvasWrapper.style.display = "none";
+        loadingIndicator.classList.remove("visible");
+        controlPanel.classList.remove("visible");
+        tooltip.classList.remove("visible");
+        placeholder.classList.remove("hidden");
     }
-    
-    handleTouchEnd(e) {
-        this.isPinching = false;
-        this.handleMouseUp({});
+
+    function showLoading() {
+        placeholder.classList.add("hidden");
+        canvasWrapper.style.display = "none";
+        controlPanel.classList.remove("visible");
+        loadingIndicator.classList.add("visible");
     }
-    
-    /**
-     * Get canvas point from event
-     */
-    getCanvasPoint(e) {
-        const rect = this.interactionCanvas.getBoundingClientRect();
+
+    function showContent() {
+        placeholder.classList.add("hidden");
+        loadingIndicator.classList.remove("visible");
+        canvasWrapper.style.display = "flex";
+        controlPanel.classList.add("visible");
+    }
+
+    // ── Canvas Sizing ─────────────────────────────────────────────
+
+    function fitCanvas() {
+        if (!state.image) return;
+
+        var wrapperW = canvasWrapper.clientWidth || 800;
+        var wrapperH = canvasWrapper.clientHeight || 600;
+
+        // Set canvas size to match wrapper
+        mainCanvas.width = wrapperW;
+        mainCanvas.height = wrapperH;
+        interactionCanvas.width = wrapperW;
+        interactionCanvas.height = wrapperH;
+
+        // Calculate scale to fit image
+        var scaleX = wrapperW / state.image.naturalWidth;
+        var scaleY = wrapperH / state.image.naturalHeight;
+        state.scale = Math.min(scaleX, scaleY);
+    }
+
+    // ── Coordinate Transformations ─────────────────────────────────
+
+    function clientToCanvas(clientX, clientY) {
+        var rect = interactionCanvas.getBoundingClientRect();
+        var cssX = (clientX - rect.left) * (interactionCanvas.width / rect.width);
+        var cssY = (clientY - rect.top) * (interactionCanvas.height / rect.height);
         return {
-            x: (e.clientX - rect.left - this.panX) / this.zoom,
-            y: (e.clientY - rect.top - this.panY) / this.zoom
+            x: (cssX - state.panX) / (state.scale * state.zoom),
+            y: (cssY - state.panY) / (state.scale * state.zoom)
         };
     }
-    
-    /**
-     * Hit test for layer selection
-     */
-    hitTest(point) {
-        // Test from top to bottom (reverse z-order)
-        const sortedLayers = [...this.layers].sort((a, b) => b.z_index - a.z_index);
-        
-        for (const layer of sortedLayers) {
+
+    function canvasToScreen(x, y) {
+        return {
+            x: x * state.scale * state.zoom + state.panX,
+            y: y * state.scale * state.zoom + state.panY
+        };
+    }
+
+    // ── Zoom/Pan Helpers ───────────────────────────────────────────
+
+    function clampPan() {
+        if (state.zoom <= 1) {
+            state.panX = 0;
+            state.panY = 0;
+            return;
+        }
+        var imgW = state.image.naturalWidth * state.scale * state.zoom;
+        var imgH = state.image.naturalHeight * state.scale * state.zoom;
+        var maxPanX = Math.max(0, imgW - mainCanvas.width);
+        var maxPanY = Math.max(0, imgH - mainCanvas.height);
+        state.panX = Math.max(-maxPanX, Math.min(0, state.panX));
+        state.panY = Math.max(-maxPanY, Math.min(0, state.panY));
+    }
+
+    function zoomTo(newZoom, centerX, centerY) {
+        newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
+
+        if (centerX == null || centerY == null) {
+            centerX = mainCanvas.width / 2;
+            centerY = mainCanvas.height / 2;
+        }
+
+        var oldZoom = state.zoom;
+        state.panX = centerX - (centerX - state.panX) * (newZoom / oldZoom);
+        state.panY = centerY - (centerY - state.panY) * (newZoom / oldZoom);
+        state.zoom = newZoom;
+
+        clampPan();
+        render();
+    }
+
+    function resetView() {
+        state.zoom = 1;
+        state.panX = 0;
+        state.panY = 0;
+        render();
+    }
+
+    // ── Rendering ─────────────────────────────────────────────────
+
+    function render() {
+        if (!state.image) return;
+
+        // Clear main canvas
+        mainCtx.setTransform(1, 0, 0, 1, 0, 0);
+        mainCtx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
+
+        // Clear interaction canvas
+        interCtx.setTransform(1, 0, 0, 1, 0, 0);
+        interCtx.clearRect(0, 0, interactionCanvas.width, interactionCanvas.height);
+
+        // Apply zoom+pan transform
+        mainCtx.setTransform(
+            state.scale * state.zoom, 0, 0,
+            state.scale * state.zoom,
+            state.panX, state.panY
+        );
+        interCtx.setTransform(
+            state.scale * state.zoom, 0, 0,
+            state.scale * state.zoom,
+            state.panX, state.panY
+        );
+
+        // Draw base image
+        mainCtx.drawImage(state.image, 0, 0);
+
+        // Draw layers (in order)
+        for (var i = 0; i < state.layers.length; i++) {
+            var layer = state.layers[i];
             if (!layer.visible) continue;
-            
-            if (layer.type === 'rect') {
-                // Check resize handles first if selected
-                if (layer.id === this.selectedLayerId) {
-                    const handle = this.getHandleAtPoint(point, layer);
-                    if (handle) {
-                        return { layer, handle };
-                    }
-                }
-                
-                // Check layer bounds
-                if (point.x >= layer.x && point.x <= layer.x + layer.width &&
-                    point.y >= layer.y && point.y <= layer.y + layer.height) {
-                    return { layer, handle: null };
-                }
-            } else if (layer.type === 'mask') {
-                // Check if inside mask region
-                for (const region of (layer.regions || [])) {
-                    if (region.type === 'rect') {
-                        if (point.x >= region.x && point.x <= region.x + region.width &&
-                            point.y >= region.y && point.y <= region.y + region.height) {
-                            return { layer, handle: null };
-                        }
-                    } else if (region.type === 'circle') {
-                        const dx = point.x - region.cx;
-                        const dy = point.y - region.cy;
-                        if (dx * dx + dy * dy <= region.r * region.r) {
-                            return { layer, handle: null };
-                        }
-                    }
-                }
+
+            var isSelected = layer.id === state.selectedLayerId;
+
+            if (layer.type === LAYER_TYPES.RECTANGLE) {
+                drawRectangle(mainCtx, layer.data, layer.color, isSelected);
+            } else if (layer.type === LAYER_TYPES.MASK) {
+                drawMask(mainCtx, layer.data, layer.color, isSelected);
             }
         }
-        
+
+        // Draw selection highlight on interaction canvas
+        if (state.selectedLayerId != null) {
+            var selectedLayer = findLayerById(state.selectedLayerId);
+            if (selectedLayer && selectedLayer.visible) {
+                drawSelectionHighlight(interCtx, selectedLayer);
+            }
+        }
+    }
+
+    function drawRectangle(ctx, data, color, isSelected) {
+        ctx.strokeStyle = color || "#4a9eff";
+        ctx.lineWidth = isSelected ? 3 / state.zoom : 2 / state.zoom;
+        ctx.strokeRect(data.x, data.y, data.width, data.height);
+
+        // Fill with semi-transparent color
+        ctx.fillStyle = hexToRgba(color || "#4a9eff", 0.2);
+        ctx.fillRect(data.x, data.y, data.width, data.height);
+    }
+
+    function drawMask(ctx, data, color, isSelected) {
+        // Mask is an array of points defining a polygon
+        if (!data.points || data.points.length < 3) return;
+
+        ctx.beginPath();
+        ctx.moveTo(data.points[0].x, data.points[0].y);
+        for (var i = 1; i < data.points.length; i++) {
+            ctx.lineTo(data.points[i].x, data.points[i].y);
+        }
+        ctx.closePath();
+
+        ctx.fillStyle = hexToRgba(color || "#ff6b6b", 0.3);
+        ctx.fill();
+
+        ctx.strokeStyle = color || "#ff6b6b";
+        ctx.lineWidth = isSelected ? 3 / state.zoom : 2 / state.zoom;
+        ctx.stroke();
+    }
+
+    function drawSelectionHighlight(ctx, layer) {
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1 / state.zoom;
+        ctx.setLineDash([5 / state.zoom, 5 / state.zoom]);
+
+        if (layer.type === LAYER_TYPES.RECTANGLE) {
+            var d = layer.data;
+            ctx.strokeRect(d.x - 2/state.zoom, d.y - 2/state.zoom, 
+                          d.width + 4/state.zoom, d.height + 4/state.zoom);
+        } else if (layer.type === LAYER_TYPES.MASK) {
+            if (layer.data.points && layer.data.points.length >= 3) {
+                ctx.beginPath();
+                ctx.moveTo(layer.data.points[0].x, layer.data.points[0].y);
+                for (var i = 1; i < layer.data.points.length; i++) {
+                    ctx.lineTo(layer.data.points[i].x, layer.data.points[i].y);
+                }
+                ctx.closePath();
+                ctx.stroke();
+            }
+        }
+
+        ctx.setLineDash([]);
+
+        // Draw resize handles for rectangle
+        if (layer.type === LAYER_TYPES.RECTANGLE) {
+            drawResizeHandles(ctx, layer.data);
+        }
+    }
+
+    function drawResizeHandles(ctx, data) {
+        var handleSize = 8 / state.zoom;
+        var handles = [
+            { x: data.x, y: data.y },                           // top-left
+            { x: data.x + data.width / 2, y: data.y },          // top-center
+            { x: data.x + data.width, y: data.y },              // top-right
+            { x: data.x, y: data.y + data.height / 2 },         // middle-left
+            { x: data.x + data.width, y: data.y + data.height / 2 }, // middle-right
+            { x: data.x, y: data.y + data.height },             // bottom-left
+            { x: data.x + data.width / 2, y: data.y + data.height }, // bottom-center
+            { x: data.x + data.width, y: data.y + data.height } // bottom-right
+        ];
+
+        ctx.fillStyle = "#fff";
+        ctx.strokeStyle = "#4a9eff";
+        ctx.lineWidth = 1 / state.zoom;
+
+        for (var i = 0; i < handles.length; i++) {
+            ctx.fillRect(handles[i].x - handleSize/2, handles[i].y - handleSize/2, 
+                        handleSize, handleSize);
+            ctx.strokeRect(handles[i].x - handleSize/2, handles[i].y - handleSize/2, 
+                          handleSize, handleSize);
+        }
+    }
+
+    // ── Helper Functions ──────────────────────────────────────────
+
+    function hexToRgba(hex, alpha) {
+        var r = parseInt(hex.slice(1, 3), 16);
+        var g = parseInt(hex.slice(3, 5), 16);
+        var b = parseInt(hex.slice(5, 7), 16);
+        return "rgba(" + r + ", " + g + ", " + b + ", " + alpha + ")";
+    }
+
+    function findLayerById(id) {
+        for (var i = 0; i < state.layers.length; i++) {
+            if (state.layers[i].id === id) return state.layers[i];
+        }
         return null;
     }
-    
-    /**
-     * Get resize handle at point
-     */
-    getHandleAtPoint(point, layer) {
-        const handleSize = 10 / this.zoom;
-        const handles = this.getHandlePositions(layer);
-        
-        for (const [name, pos] of Object.entries(handles)) {
-            if (point.x >= pos.x - handleSize / 2 && point.x <= pos.x + handleSize / 2 &&
-                point.y >= pos.y - handleSize / 2 && point.y <= pos.y + handleSize / 2) {
-                return name;
-            }
+
+    function findLayerIndexById(id) {
+        for (var i = 0; i < state.layers.length; i++) {
+            if (state.layers[i].id === id) return i;
         }
-        
-        return null;
+        return -1;
     }
-    
-    /**
-     * Get handle positions for a layer
-     */
-    getHandlePositions(layer) {
-        return {
-            nw: { x: layer.x, y: layer.y },
-            n: { x: layer.x + layer.width / 2, y: layer.y },
-            ne: { x: layer.x + layer.width, y: layer.y },
-            e: { x: layer.x + layer.width, y: layer.y + layer.height / 2 },
-            se: { x: layer.x + layer.width, y: layer.y + layer.height },
-            s: { x: layer.x + layer.width / 2, y: layer.y + layer.height },
-            sw: { x: layer.x, y: layer.y + layer.height },
-            w: { x: layer.x, y: layer.y + layer.height / 2 }
-        };
+
+    function generateLayerName(type) {
+        var count = 0;
+        for (var i = 0; i < state.layers.length; i++) {
+            if (state.layers[i].type === type) count++;
+        }
+        return (type === LAYER_TYPES.RECTANGLE ? "Rectangle " : "Mask ") + (count + 1);
     }
-    
-    /**
-     * Resize layer based on active handle
-     */
-    resizeLayer(point) {
-        const layer = this.getLayerById(this.selectedLayerId);
-        if (!layer) return;
-        
-        const dx = point.x - this.resizeStart.x;
-        const dy = point.y - this.resizeStart.y;
-        
-        switch (this.activeHandle) {
-            case 'nw':
-                layer.x = this.originalRect.x + dx;
-                layer.y = this.originalRect.y + dy;
-                layer.width = this.originalRect.width - dx;
-                layer.height = this.originalRect.height - dy;
-                break;
-            case 'n':
-                layer.y = this.originalRect.y + dy;
-                layer.height = this.originalRect.height - dy;
-                break;
-            case 'ne':
-                layer.y = this.originalRect.y + dy;
-                layer.width = this.originalRect.width + dx;
-                layer.height = this.originalRect.height - dy;
-                break;
-            case 'e':
-                layer.width = this.originalRect.width + dx;
-                break;
-            case 'se':
-                layer.width = this.originalRect.width + dx;
-                layer.height = this.originalRect.height + dy;
-                break;
-            case 's':
-                layer.height = this.originalRect.height + dy;
-                break;
-            case 'sw':
-                layer.x = this.originalRect.x + dx;
-                layer.width = this.originalRect.width - dx;
-                layer.height = this.originalRect.height + dy;
-                break;
-            case 'w':
-                layer.x = this.originalRect.x + dx;
-                layer.width = this.originalRect.width - dx;
-                break;
-        }
-        
-        // Ensure minimum size
-        if (layer.width < 10) {
-            if (this.activeHandle.includes('w')) {
-                layer.x = this.originalRect.x + this.originalRect.width - 10;
-            }
-            layer.width = 10;
-        }
-        if (layer.height < 10) {
-            if (this.activeHandle.includes('n')) {
-                layer.y = this.originalRect.y + this.originalRect.height - 10;
-            }
-            layer.height = 10;
-        }
-        
-        // Update mask regions if needed
-        if (layer.type === 'mask' && layer.regions && layer.regions.length > 0) {
-            layer.regions[0].x = layer.x;
-            layer.regions[0].y = layer.y;
-            layer.regions[0].width = layer.width;
-            layer.regions[0].height = layer.height;
-        }
-        
-        this.resizeStart = point;
-        this.originalRect = { ...layer };
-        
-        this.render();
-        this.emitLayerChange();
+
+    function getRandomColor() {
+        var colors = ["#4a9eff", "#ff6b6b", "#51cf66", "#ffd93d", "#a78bfa", "#ff8787", "#74c0fc"];
+        return colors[Math.floor(Math.random() * colors.length)];
     }
-    
-    /**
-     * Update cursor based on hit test
-     */
-    updateCursor(hitResult) {
-        if (this.currentTool === 'pan') {
-            this.interactionCanvas.className = 'grab';
-        } else if (hitResult && hitResult.handle) {
-            const handleCursors = {
-                nw: 'nwse-resize', ne: 'nesw-resize',
-                sw: 'nesw-resize', se: 'nwse-resize',
-                n: 'ns-resize', s: 'ns-resize',
-                e: 'ew-resize', w: 'ew-resize'
-            };
-            this.interactionCanvas.style.cursor = handleCursors[hitResult.handle];
-        } else if (hitResult && hitResult.layer) {
-            this.interactionCanvas.style.cursor = 'move';
-        } else if (this.currentTool === 'rect' || this.currentTool === 'mask') {
-            this.interactionCanvas.style.cursor = 'crosshair';
-        } else {
-            this.interactionCanvas.style.cursor = 'default';
+
+    // ── Control Panel ─────────────────────────────────────────────
+
+    function renderControlPanel() {
+        if (!state.image) {
+            controlPanel.classList.remove("visible");
+            return;
+        }
+
+        controlPanel.classList.add("visible");
+
+        // Render layer list
+        var html = "";
+        for (var i = state.layers.length - 1; i >= 0; i--) {
+            var layer = state.layers[i];
+            var isSelected = layer.id === state.selectedLayerId;
+            var icon = layer.type === LAYER_TYPES.RECTANGLE ? "&#9645;" : "&#9670;";
+
+            html += '<div class="layer-item' + (isSelected ? ' active' : '') + '" data-id="' + layer.id + '">';
+            html += '<span class="layer-icon">' + icon + '</span>';
+            html += '<span class="layer-name">' + escapeHtml(layer.name) + '</span>';
+            html += '<div class="layer-controls">';
+            html += '<button class="layer-btn visibility-btn' + (layer.visible ? '' : ' hidden') + '" data-id="' + layer.id + '" title="Toggle visibility">' + (layer.visible ? '&#128065;' : '&#128065;&#8205;&#128488;') + '</button>';
+            html += '<button class="layer-btn delete-btn" data-id="' + layer.id + '" title="Delete">&#128465;</button>';
+            html += '</div>';
+            html += '</div>';
+        }
+
+        if (state.layers.length === 0) {
+            html = '<div style="padding: 20px; text-align: center; color: #888; font-size: 12px;">No layers yet.<br>Use the toolbar to add rectangles or masks.</div>';
+        }
+
+        layerList.innerHTML = html;
+
+        // Render layer properties
+        renderLayerProperties();
+
+        // Bind events
+        bindLayerEvents();
+    }
+
+    function renderLayerProperties() {
+        if (state.selectedLayerId == null) {
+            layerProperties.classList.remove("visible");
+            return;
+        }
+
+        var layer = findLayerById(state.selectedLayerId);
+        if (!layer) {
+            layerProperties.classList.remove("visible");
+            return;
+        }
+
+        layerProperties.classList.add("visible");
+
+        var html = '<div class="prop-section">';
+
+        if (layer.type === LAYER_TYPES.RECTANGLE) {
+            html += '<div class="prop-row"><label>X:</label><input type="number" class="prop-x" value="' + layer.data.x.toFixed(1) + '"></div>';
+            html += '<div class="prop-row"><label>Y:</label><input type="number" class="prop-y" value="' + layer.data.y.toFixed(1) + '"></div>';
+            html += '<div class="prop-row"><label>Width:</label><input type="number" class="prop-width" value="' + layer.data.width.toFixed(1) + '"></div>';
+            html += '<div class="prop-row"><label>Height:</label><input type="number" class="prop-height" value="' + layer.data.height.toFixed(1) + '"></div>';
+        }
+
+        html += '<div class="prop-row"><label>Color:</label><input type="color" class="prop-color" value="' + layer.color + '"></div>';
+        html += '<div class="prop-row"><label>Opacity:</label><input type="range" class="prop-opacity" min="0" max="100" value="30"><span>30%</span></div>';
+        html += '</div>';
+
+        layerProperties.innerHTML = html;
+
+        // Bind property events
+        bindPropertyEvents(layer);
+    }
+
+    function bindLayerEvents() {
+        // Layer item click (select)
+        var items = layerList.querySelectorAll(".layer-item");
+        for (var i = 0; i < items.length; i++) {
+            items[i].addEventListener("click", function (e) {
+                if (e.target.closest(".layer-controls")) return;
+                var id = parseInt(this.getAttribute("data-id"), 10);
+                selectLayer(id);
+            });
+        }
+
+        // Visibility toggle
+        var visBtns = layerList.querySelectorAll(".visibility-btn");
+        for (var i = 0; i < visBtns.length; i++) {
+            visBtns[i].addEventListener("click", function (e) {
+                e.stopPropagation();
+                var id = parseInt(this.getAttribute("data-id"), 10);
+                toggleLayerVisibility(id);
+            });
+        }
+
+        // Delete button
+        var delBtns = layerList.querySelectorAll(".delete-btn");
+        for (var i = 0; i < delBtns.length; i++) {
+            delBtns[i].addEventListener("click", function (e) {
+                e.stopPropagation();
+                var id = parseInt(this.getAttribute("data-id"), 10);
+                deleteLayer(id);
+            });
         }
     }
-    
-    /**
-     * Show tooltip
-     */
-    showTooltip(x, y, text) {
-        this.tooltip = { x: x + 10, y: y + 10, text };
-    }
-    
-    /**
-     * Hide tooltip
-     */
-    hideTooltip() {
-        this.tooltip = null;
-    }
-    
-    // ==================== Layer Management ====================
-    
-    /**
-     * Set background image
-     */
-    setBackgroundImage(src) {
-        this.loading = true;
-        this.render();
-        
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        
-        img.onload = () => {
-            this.imageElement = img;
-            this.imageWidth = img.width;
-            this.imageHeight = img.height;
-            this.imageLoaded = true;
-            this.loading = false;
-            
-            // Fit image to canvas
-            this.fitToCanvas();
-            this.render();
-        };
-        
-        img.onerror = () => {
-            console.error('Failed to load image:', src);
-            this.loading = false;
-            this.imageLoaded = false;
-            this.render();
-        };
-        
-        img.src = src;
-    }
-    
-    /**
-     * Fit image to canvas
-     */
-    fitToCanvas() {
-        if (!this.imageLoaded || !this.imageElement) return;
-        
-        const scaleX = this.canvasWidth / this.imageWidth;
-        const scaleY = this.canvasHeight / this.imageHeight;
-        this.zoom = Math.min(scaleX, scaleY) * 0.9;
-        
-        this.panX = (this.canvasWidth - this.imageWidth * this.zoom) / 2;
-        this.panY = (this.canvasHeight - this.imageHeight * this.zoom) / 2;
-    }
-    
-    /**
-     * Add a layer
-     */
-    addLayer(layer) {
-        layer.z_index = this.layers.length;
-        this.layers.push(layer);
-        this.render();
-        this.emitLayerChange();
-        return layer;
-    }
-    
-    /**
-     * Remove a layer
-     */
-    removeLayer(id) {
-        const index = this.layers.findIndex(l => l.id === id);
-        if (index !== -1) {
-            this.layers.splice(index, 1);
-            if (this.selectedLayerId === id) {
-                this.selectedLayerId = null;
-            }
-            this.render();
-            this.emitLayerChange();
+
+    function bindPropertyEvents(layer) {
+        var xInput = layerProperties.querySelector(".prop-x");
+        var yInput = layerProperties.querySelector(".prop-y");
+        var wInput = layerProperties.querySelector(".prop-width");
+        var hInput = layerProperties.querySelector(".prop-height");
+        var colorInput = layerProperties.querySelector(".prop-color");
+
+        function updateRect() {
+            if (xInput) layer.data.x = parseFloat(xInput.value) || 0;
+            if (yInput) layer.data.y = parseFloat(yInput.value) || 0;
+            if (wInput) layer.data.width = parseFloat(wInput.value) || 0;
+            if (hInput) layer.data.height = parseFloat(hInput.value) || 0;
+            render();
+        }
+
+        if (xInput) xInput.addEventListener("change", updateRect);
+        if (yInput) yInput.addEventListener("change", updateRect);
+        if (wInput) wInput.addEventListener("change", updateRect);
+        if (hInput) hInput.addEventListener("change", updateRect);
+
+        if (colorInput) {
+            colorInput.addEventListener("change", function () {
+                layer.color = this.value;
+                render();
+                renderControlPanel();
+            });
         }
     }
-    
-    /**
-     * Get layer by ID
-     */
-    getLayerById(id) {
-        return this.layers.find(l => l.id === id);
+
+    function escapeHtml(text) {
+        var div = document.createElement("div");
+        div.textContent = text;
+        return div.innerHTML;
     }
-    
-    /**
-     * Select a layer
-     */
-    selectLayer(id) {
-        this.selectedLayerId = id;
-        this.render();
-        this.emitSelectionChange();
+
+    // ── Layer Operations ──────────────────────────────────────────
+
+    function selectLayer(id) {
+        state.selectedLayerId = id;
+        render();
+        renderControlPanel();
     }
-    
-    /**
-     * Toggle layer visibility
-     */
-    toggleLayerVisibility(id) {
-        const layer = this.getLayerById(id);
+
+    function toggleLayerVisibility(id) {
+        var layer = findLayerById(id);
         if (layer) {
             layer.visible = !layer.visible;
-            this.render();
-            this.emitLayerChange();
+            render();
+            renderControlPanel();
         }
     }
-    
-    /**
-     * Create a rectangle layer
-     */
-    createRectLayer(x, y, width, height, options = {}) {
-        const id = 'rect_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-        return {
-            type: 'rect',
-            id,
-            name: options.name || `Rectangle ${this.layers.filter(l => l.type === 'rect').length + 1}`,
-            x,
-            y,
-            width: width || 100,
-            height: height || 100,
-            color: options.color || '#4a9eff',
-            strokeColor: options.strokeColor || '#ffffff',
-            strokeWidth: options.strokeWidth || 2,
-            fill: options.fill !== false,
-            opacity: options.opacity ?? 0.5,
-            borderRadius: options.borderRadius || 0,
-            visible: true,
-            z_index: this.layers.length
-        };
+
+    function deleteLayer(id) {
+        var idx = findLayerIndexById(id);
+        if (idx >= 0) {
+            state.layers.splice(idx, 1);
+            if (state.selectedLayerId === id) {
+                state.selectedLayerId = null;
+            }
+            render();
+            renderControlPanel();
+        }
     }
-    
-    /**
-     * Create a mask layer
-     */
-    createMaskLayer(x, y, width, height, options = {}) {
-        const id = 'mask_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-        return {
-            type: 'mask',
-            id,
-            name: options.name || `Mask ${this.layers.filter(l => l.type === 'mask').length + 1}`,
-            x,
-            y,
-            width: width || 100,
-            height: height || 100,
-            color: options.color || '#000000',
-            maskOpacity: options.maskOpacity ?? 0.7,
-            regions: [{
-                type: 'rect',
-                x,
-                y,
-                width: width || 100,
-                height: height || 100
-            }],
-            opacity: 1,
-            visible: true,
-            z_index: this.layers.length
-        };
+
+    function clearAllLayers() {
+        state.layers = [];
+        state.selectedLayerId = null;
+        render();
+        renderControlPanel();
     }
-    
-    /**
-     * Add a mask region
-     */
-    addMaskRegion(layerId, region) {
-        const layer = this.getLayerById(layerId);
-        if (layer && layer.type === 'mask') {
-            if (!layer.regions) layer.regions = [];
-            layer.regions.push(region || {
-                type: 'rect',
-                x: 50,
-                y: 50,
-                width: 100,
-                height: 100
+
+    function addRectangle(x, y, width, height) {
+        var layer = {
+            id: state.nextLayerId++,
+            type: LAYER_TYPES.RECTANGLE,
+            name: generateLayerName(LAYER_TYPES.RECTANGLE),
+            visible: true,
+            color: getRandomColor(),
+            data: { x: x, y: y, width: width, height: height }
+        };
+        state.layers.push(layer);
+        state.selectedLayerId = layer.id;
+        render();
+        renderControlPanel();
+        return layer;
+    }
+
+    function addMask(points) {
+        var layer = {
+            id: state.nextLayerId++,
+            type: LAYER_TYPES.MASK,
+            name: generateLayerName(LAYER_TYPES.MASK),
+            visible: true,
+            color: getRandomColor(),
+            data: { points: points }
+        };
+        state.layers.push(layer);
+        state.selectedLayerId = layer.id;
+        render();
+        renderControlPanel();
+        return layer;
+    }
+
+    // ── Tool Selection ────────────────────────────────────────────
+
+    function setTool(toolName) {
+        state.tool = toolName;
+
+        // Update button states
+        selectBtn.classList.toggle("active", toolName === "select");
+        rectBtn.classList.toggle("active", toolName === "rect");
+        maskBtn.classList.toggle("active", toolName === "mask");
+
+        // Update cursor
+        updateCursor();
+    }
+
+    function updateCursor() {
+        interactionCanvas.classList.remove("grab", "grabbing", "crosshair", "move");
+
+        if (state.tool === "select") {
+            interactionCanvas.classList.add(state.isPanning ? "grabbing" : "grab");
+        } else if (state.tool === "rect" || state.tool === "mask") {
+            interactionCanvas.classList.add("crosshair");
+        }
+    }
+
+    // ── Toolbar Event Handlers ────────────────────────────────────
+
+    // Toolbar buttons
+    if (selectBtn) selectBtn.addEventListener("click", function () { setTool("select"); });
+    if (rectBtn) rectBtn.addEventListener("click", function () { setTool("rect"); });
+    if (maskBtn) maskBtn.addEventListener("click", function () { setTool("mask"); });
+
+    // Control panel buttons
+    if (addRectBtn) addRectBtn.addEventListener("click", function () {
+        // Add a default rectangle in center
+        var x = state.image ? state.image.naturalWidth / 2 - 50 : 100;
+        var y = state.image ? state.image.naturalHeight / 2 - 50 : 100;
+        addRectangle(x, y, 100, 100);
+    });
+
+    if (addMaskBtn) addMaskBtn.addEventListener("click", function () {
+        // Add a sample mask
+        var cx = state.image ? state.image.naturalWidth / 2 : 200;
+        var cy = state.image ? state.image.naturalHeight / 2 : 200;
+        var r = 80;
+        var points = [];
+        for (var i = 0; i < 8; i++) {
+            var angle = (i / 8) * Math.PI * 2;
+            points.push({
+                x: cx + Math.cos(angle) * r,
+                y: cy + Math.sin(angle) * r
             });
-            this.render();
-            this.emitLayerChange();
         }
-    }
-    
-    /**
-     * Remove a mask region
-     */
-    removeMaskRegion(layerId, index) {
-        const layer = this.getLayerById(layerId);
-        if (layer && layer.type === 'mask' && layer.regions) {
-            layer.regions.splice(index, 1);
-            this.render();
-            this.emitLayerChange();
+        addMask(points);
+    });
+
+    if (clearAllBtn) clearAllBtn.addEventListener("click", function () {
+        if (confirm("清除所有图层?")) {
+            clearAllLayers();
         }
-    }
-    
-    /**
-     * Clear all layers
-     */
-    clearAllLayers() {
-        this.layers = [];
-        this.selectedLayerId = null;
-        this.render();
-        this.emitLayerChange();
-    }
-    
-    /**
-     * Set current tool
-     */
-    setTool(tool) {
-        this.currentTool = tool;
-        this.updateCursor(null);
-    }
-    
-    /**
-     * Load layers from JSON
-     */
-    loadLayers(data) {
-        if (data.image) {
-            this.setBackgroundImage(data.image);
-        }
-        if (data.layers) {
-            this.layers = data.layers;
-        }
-        this.render();
-    }
-    
-    /**
-     * Export layers to JSON
-     */
-    exportLayers() {
-        return {
-            image: this.backgroundImage,
-            layers: [...this.layers],
-            view: {
-                zoom: this.zoom,
-                panX: this.panX,
-                panY: this.panY
-            }
+    });
+
+    if (resetViewBtn) resetViewBtn.addEventListener("click", function () {
+        resetView();
+    });
+
+    if (exportJsonBtn) exportJsonBtn.addEventListener("click", function () {
+        exportData();
+    });
+
+    function exportData() {
+        var data = {
+            image: state.image ? state.image.src : null,
+            layers: state.layers.map(function (l) {
+                return {
+                    type: l.type,
+                    name: l.name,
+                    color: l.color,
+                    data: l.data
+                };
+            })
         };
+        console.log("Export data:", data);
+        alert("数据已导出到控制台。");
     }
-    
-    // ==================== Rendering ====================
-    
-    /**
-     * Main render function
-     */
-    render() {
-        if (!this.mainCtx) return;
-        
-        // Clear canvas
-        this.mainCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-        this.interactionCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
-        
-        // Fill background
-        this.mainCtx.fillStyle = this.backgroundColor;
-        this.mainCtx.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
-        
-        // Draw grid if enabled
-        if (this.showGrid) {
-            this.drawGrid();
-        }
-        
-        // Apply transformations
-        this.mainCtx.save();
-        this.mainCtx.translate(this.panX, this.panY);
-        this.mainCtx.scale(this.zoom, this.zoom);
-        
-        // Draw background image
-        if (this.imageLoaded && this.imageElement) {
-            this.mainCtx.drawImage(this.imageElement, 0, 0);
-        }
-        
-        // Draw layers (sorted by z_index)
-        const sortedLayers = [...this.layers].sort((a, b) => a.z_index - b.z_index);
-        for (const layer of sortedLayers) {
-            if (!layer.visible) continue;
-            
-            if (layer.type === 'rect') {
-                this.drawRectLayer(layer);
-            } else if (layer.type === 'mask') {
-                this.drawMaskLayer(layer);
-            }
-        }
-        
-        this.mainCtx.restore();
-        
-        // Draw selection and handles on interaction canvas
-        if (this.selectedLayerId) {
-            this.drawSelection(this.getLayerById(this.selectedLayerId));
-        }
-    }
-    
-    /**
-     * Draw grid
-     */
-    drawGrid() {
-        const gridSize = 20 * this.zoom;
-        this.mainCtx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-        this.mainCtx.lineWidth = 1;
-        
-        const startX = this.panX % gridSize;
-        const startY = this.panY % gridSize;
-        
-        for (let x = startX; x < this.canvasWidth; x += gridSize) {
-            this.mainCtx.beginPath();
-            this.mainCtx.moveTo(x, 0);
-            this.mainCtx.lineTo(x, this.canvasHeight);
-            this.mainCtx.stroke();
-        }
-        
-        for (let y = startY; y < this.canvasHeight; y += gridSize) {
-            this.mainCtx.beginPath();
-            this.mainCtx.moveTo(0, y);
-            this.mainCtx.lineTo(this.canvasWidth, y);
-            this.mainCtx.stroke();
-        }
-    }
-    
-    /**
-     * Draw rectangle layer
-     */
-    drawRectLayer(layer) {
-        this.mainCtx.save();
-        this.mainCtx.globalAlpha = layer.opacity;
-        
-        // Fill
-        if (layer.fill) {
-            this.mainCtx.fillStyle = layer.color;
-            if (layer.borderRadius > 0) {
-                this.roundRect(layer.x, layer.y, layer.width, layer.height, layer.borderRadius);
-                this.mainCtx.fill();
+
+    // ── Canvas Mouse Interaction ──────────────────────────────────
+
+    interactionCanvas.addEventListener("mousedown", function (e) {
+        if (!state.image) return;
+        if (e.button !== 0) return;
+
+        var pt = clientToCanvas(e.clientX, e.clientY);
+
+        if (state.tool === "select") {
+            // Check if clicking on a layer
+            var hitLayer = findLayerAt(pt.x, pt.y);
+            if (hitLayer) {
+                selectLayer(hitLayer.id);
             } else {
-                this.mainCtx.fillRect(layer.x, layer.y, layer.width, layer.height);
+                // Start panning
+                state.isPanning = true;
+                state.didDrag = false;
+                state.panStartX = e.clientX;
+                state.panStartY = e.clientY;
+                state.panStartPanX = state.panX;
+                state.panStartPanY = state.panY;
+                updateCursor();
             }
+        } else if (state.tool === "rect") {
+            state.isDrawing = true;
+            state.drawStart = pt;
+        } else if (state.tool === "mask") {
+            // For mask, we would start a polygon drawing mode
+            // Simplified: just create a sample mask
+            alert("Mask drawing not fully implemented. Use rectangle tool instead.");
         }
-        
-        // Stroke
-        if (layer.strokeWidth > 0) {
-            this.mainCtx.strokeStyle = layer.strokeColor;
-            this.mainCtx.lineWidth = layer.strokeWidth / this.zoom;
-            if (layer.borderRadius > 0) {
-                this.roundRect(layer.x, layer.y, layer.width, layer.height, layer.borderRadius);
-                this.mainCtx.stroke();
-            } else {
-                this.mainCtx.strokeRect(layer.x, layer.y, layer.width, layer.height);
+    });
+
+    window.addEventListener("mousemove", function (e) {
+        if (!state.image) return;
+
+        if (state.isPanning) {
+            var dx = e.clientX - state.panStartX;
+            var dy = e.clientY - state.panStartY;
+
+            if (!state.didDrag && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
+                state.didDrag = true;
             }
+
+            var rect = interactionCanvas.getBoundingClientRect();
+            state.panX = state.panStartPanX + dx * (interactionCanvas.width / rect.width);
+            state.panY = state.panStartPanY + dy * (interactionCanvas.height / rect.height);
+            clampPan();
+            render();
+            return;
         }
-        
-        this.mainCtx.restore();
-    }
-    
-    /**
-     * Draw rounded rectangle
-     */
-    roundRect(x, y, width, height, radius) {
-        this.mainCtx.beginPath();
-        this.mainCtx.moveTo(x + radius, y);
-        this.mainCtx.lineTo(x + width - radius, y);
-        this.mainCtx.quadraticCurveTo(x + width, y, x + width, y + radius);
-        this.mainCtx.lineTo(x + width, y + height - radius);
-        this.mainCtx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-        this.mainCtx.lineTo(x + radius, y + height);
-        this.mainCtx.quadraticCurveTo(x, y + height, x, y + height - radius);
-        this.mainCtx.lineTo(x, y + radius);
-        this.mainCtx.quadraticCurveTo(x, y, x + radius, y);
-        this.mainCtx.closePath();
-    }
-    
-    /**
-     * Draw mask layer
-     */
-    drawMaskLayer(layer) {
-        if (!layer.regions || layer.regions.length === 0) return;
-        
-        this.mainCtx.save();
-        
-        // Create mask path
-        this.mainCtx.beginPath();
-        this.mainCtx.rect(0, 0, this.imageWidth || this.canvasWidth, this.imageHeight || this.canvasHeight);
-        
-        for (const region of layer.regions) {
-            if (region.type === 'rect') {
-                this.mainCtx.rect(region.x, region.y, region.width, region.height);
-            } else if (region.type === 'circle') {
-                this.mainCtx.arc(region.cx, region.cy, region.r, 0, Math.PI * 2);
-            } else if (region.type === 'ellipse') {
-                this.mainCtx.ellipse(region.cx, region.cy, region.rx, region.ry, 0, 0, Math.PI * 2);
-            } else if (region.type === 'polygon' && region.points) {
-                this.mainCtx.moveTo(region.points[0].x, region.points[0].y);
-                for (let i = 1; i < region.points.length; i++) {
-                    this.mainCtx.lineTo(region.points[i].x, region.points[i].y);
+
+        if (state.isDrawing && state.tool === "rect") {
+            // Draw preview rectangle
+            var pt = clientToCanvas(e.clientX, e.clientY);
+            render(); // Clear previous preview
+
+            var x = Math.min(state.drawStart.x, pt.x);
+            var y = Math.min(state.drawStart.y, pt.y);
+            var w = Math.abs(pt.x - state.drawStart.x);
+            var h = Math.abs(pt.y - state.drawStart.y);
+
+            interCtx.save();
+            interCtx.setTransform(
+                state.scale * state.zoom, 0, 0,
+                state.scale * state.zoom,
+                state.panX, state.panY
+            );
+            interCtx.strokeStyle = "#4a9eff";
+            interCtx.lineWidth = 2 / state.zoom;
+            interCtx.setLineDash([5 / state.zoom, 5 / state.zoom]);
+            interCtx.strokeRect(x, y, w, h);
+            interCtx.restore();
+        }
+
+        // Tooltip
+        var pt = clientToCanvas(e.clientX, e.clientY);
+        var hitLayer = findLayerAt(pt.x, pt.y);
+        if (hitLayer) {
+            tooltip.textContent = hitLayer.name;
+            tooltip.classList.add("visible");
+            var rect = container.getBoundingClientRect();
+            tooltip.style.left = (e.clientX - rect.left + 12) + "px";
+            tooltip.style.top = (e.clientY - rect.top - 8) + "px";
+        } else {
+            tooltip.classList.remove("visible");
+        }
+    });
+
+    window.addEventListener("mouseup", function (e) {
+        if (!state.image) return;
+
+        if (state.isPanning) {
+            state.isPanning = false;
+            updateCursor();
+
+            if (!state.didDrag) {
+                // Click without drag - deselect
+                var pt = clientToCanvas(e.clientX, e.clientY);
+                var hitLayer = findLayerAt(pt.x, pt.y);
+                if (!hitLayer) {
+                    state.selectedLayerId = null;
+                    render();
+                    renderControlPanel();
                 }
-                this.mainCtx.closePath();
             }
         }
-        
-        // Use even-odd fill rule to create holes
-        this.mainCtx.fillStyle = layer.color;
-        this.mainCtx.globalAlpha = layer.maskOpacity;
-        this.mainCtx.fill('evenodd');
-        
-        this.mainCtx.restore();
-        
-        // Draw region borders
-        this.mainCtx.save();
-        this.mainCtx.strokeStyle = '#4a9eff';
-        this.mainCtx.lineWidth = 2 / this.zoom;
-        this.mainCtx.setLineDash([5 / this.zoom, 5 / this.zoom]);
-        
-        for (const region of layer.regions) {
-            if (region.type === 'rect') {
-                this.mainCtx.strokeRect(region.x, region.y, region.width, region.height);
+
+        if (state.isDrawing && state.tool === "rect") {
+            state.isDrawing = false;
+            var pt = clientToCanvas(e.clientX, e.clientY);
+
+            var x = Math.min(state.drawStart.x, pt.x);
+            var y = Math.min(state.drawStart.y, pt.y);
+            var w = Math.abs(pt.x - state.drawStart.x);
+            var h = Math.abs(pt.y - state.drawStart.y);
+
+            if (w > 5 && h > 5) {
+                addRectangle(x, y, w, h);
+            } else {
+                render(); // Clear preview
             }
         }
-        
-        this.mainCtx.restore();
-    }
-    
-    /**
-     * Draw selection and handles
-     */
-    drawSelection(layer) {
-        if (!layer || layer.type === 'mask') return;
-        
-        this.interactionCtx.save();
-        this.interactionCtx.translate(this.panX, this.panY);
-        this.interactionCtx.scale(this.zoom, this.zoom);
-        
-        // Selection border
-        this.interactionCtx.strokeStyle = '#4a9eff';
-        this.interactionCtx.lineWidth = 2 / this.zoom;
-        this.interactionCtx.setLineDash([5 / this.zoom, 5 / this.zoom]);
-        this.interactionCtx.strokeRect(layer.x, layer.y, layer.width, layer.height);
-        
-        // Resize handles
-        this.interactionCtx.setLineDash([]);
-        const handleSize = 10 / this.zoom;
-        const handles = this.getHandlePositions(layer);
-        
-        for (const pos of Object.values(handles)) {
-            this.interactionCtx.fillStyle = '#ffffff';
-            this.interactionCtx.strokeStyle = '#4a9eff';
-            this.interactionCtx.lineWidth = 2 / this.zoom;
-            this.interactionCtx.fillRect(pos.x - handleSize / 2, pos.y - handleSize / 2, handleSize, handleSize);
-            this.interactionCtx.strokeRect(pos.x - handleSize / 2, pos.y - handleSize / 2, handleSize, handleSize);
-        }
-        
-        this.interactionCtx.restore();
-    }
-    
-    // ==================== View Controls ====================
-    
-    zoomIn() {
-        this.zoom = Math.min(this.maxZoom, this.zoom * 1.2);
-        this.render();
-        this.emitViewChange();
-    }
-    
-    zoomOut() {
-        this.zoom = Math.max(this.minZoom, this.zoom / 1.2);
-        this.render();
-        this.emitViewChange();
-    }
-    
-    resetView() {
-        this.zoom = 1;
-        this.panX = 0;
-        this.panY = 0;
-        this.fitToCanvas();
-        this.render();
-        this.emitViewChange();
-    }
-    
-    // ==================== Export ====================
-    
-    exportImage() {
-        // Create a temporary canvas without selection indicators
-        const exportCanvas = document.createElement('canvas');
-        const exportCtx = exportCanvas.getContext('2d');
-        
-        const width = this.imageWidth || this.canvasWidth;
-        const height = this.imageHeight || this.canvasHeight;
-        
-        exportCanvas.width = width;
-        exportCanvas.height = height;
-        
-        // Draw background
-        exportCtx.fillStyle = this.backgroundColor;
-        exportCtx.fillRect(0, 0, width, height);
-        
-        // Draw background image
-        if (this.imageLoaded && this.imageElement) {
-            exportCtx.drawImage(this.imageElement, 0, 0);
-        }
-        
-        // Draw layers
-        const sortedLayers = [...this.layers].sort((a, b) => a.z_index - b.z_index);
-        for (const layer of sortedLayers) {
+    });
+
+    function findLayerAt(x, y) {
+        // Check layers in reverse order (topmost first)
+        for (var i = state.layers.length - 1; i >= 0; i--) {
+            var layer = state.layers[i];
             if (!layer.visible) continue;
-            
-            if (layer.type === 'rect') {
-                exportCtx.save();
-                exportCtx.globalAlpha = layer.opacity;
-                if (layer.fill) {
-                    exportCtx.fillStyle = layer.color;
-                    if (layer.borderRadius > 0) {
-                        this.roundRectOnContext(exportCtx, layer.x, layer.y, layer.width, layer.height, layer.borderRadius);
-                        exportCtx.fill();
-                    } else {
-                        exportCtx.fillRect(layer.x, layer.y, layer.width, layer.height);
+
+            if (layer.type === LAYER_TYPES.RECTANGLE) {
+                var d = layer.data;
+                if (x >= d.x && x <= d.x + d.width && y >= d.y && y <= d.y + d.height) {
+                    return layer;
+                }
+            } else if (layer.type === LAYER_TYPES.MASK) {
+                // Simple bounding box check for masks
+                if (layer.data.points && layer.data.points.length > 0) {
+                    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                    for (var j = 0; j < layer.data.points.length; j++) {
+                        var p = layer.data.points[j];
+                        minX = Math.min(minX, p.x);
+                        minY = Math.min(minY, p.y);
+                        maxX = Math.max(maxX, p.x);
+                        maxY = Math.max(maxY, p.y);
+                    }
+                    if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
+                        return layer;
                     }
                 }
-                if (layer.strokeWidth > 0) {
-                    exportCtx.strokeStyle = layer.strokeColor;
-                    exportCtx.lineWidth = layer.strokeWidth;
-                    exportCtx.strokeRect(layer.x, layer.y, layer.width, layer.height);
-                }
-                exportCtx.restore();
-            } else if (layer.type === 'mask') {
-                this.drawMaskLayerOnContext(exportCtx, layer, width, height);
             }
         }
-        
-        // Download
-        const link = document.createElement('a');
-        link.download = 'layer-canvas-export.png';
-        link.href = exportCanvas.toDataURL('image/png');
-        link.click();
+        return null;
     }
-    
-    roundRectOnContext(ctx, x, y, width, height, radius) {
-        ctx.beginPath();
-        ctx.moveTo(x + radius, y);
-        ctx.lineTo(x + width - radius, y);
-        ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
-        ctx.lineTo(x + width, y + height - radius);
-        ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-        ctx.lineTo(x + radius, y + height);
-        ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-        ctx.lineTo(x, y + radius);
-        ctx.quadraticCurveTo(x, y, x + radius, y);
-        ctx.closePath();
-    }
-    
-    drawMaskLayerOnContext(ctx, layer, canvasWidth, canvasHeight) {
-        if (!layer.regions || layer.regions.length === 0) return;
-        
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(0, 0, canvasWidth, canvasHeight);
-        
-        for (const region of layer.regions) {
-            if (region.type === 'rect') {
-                ctx.rect(region.x, region.y, region.width, region.height);
-            } else if (region.type === 'circle') {
-                ctx.arc(region.cx, region.cy, region.r, 0, Math.PI * 2);
-            }
-        }
-        
-        ctx.fillStyle = layer.color;
-        ctx.globalAlpha = layer.maskOpacity;
-        ctx.fill('evenodd');
-        ctx.restore();
-    }
-    
-    exportJSON() {
-        const data = this.exportLayers();
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const link = document.createElement('a');
-        link.download = 'layer-canvas-config.json';
-        link.href = URL.createObjectURL(blob);
-        link.click();
-        URL.revokeObjectURL(link.href);
-    }
-    
-    // ==================== Event Emitters ====================
-    
-    emitLayerChange() {
-        if (this.onLayerChange) {
-            this.onLayerChange(this.layers);
-        }
-    }
-    
-    emitSelectionChange() {
-        if (this.onSelectionChange) {
-            this.onSelectionChange(this.selectedLayerId);
-        }
-    }
-    
-    emitViewChange() {
-        if (this.onViewChange) {
-            this.onViewChange({ zoom: this.zoom, panX: this.panX, panY: this.panY });
-        }
-    }
-}
 
-// Export for module usage
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = LayerCanvas;
-} else {
-    window.LayerCanvas = LayerCanvas;
-}
+    // ── Wheel Zoom ─────────────────────────────────────────────────
+
+    interactionCanvas.addEventListener("wheel", function (e) {
+        if (!state.image) return;
+        e.preventDefault();
+
+        var delta = e.deltaY;
+        if (e.deltaMode === 1) delta *= 16;
+        else if (e.deltaMode === 2) delta *= 100;
+
+        var newZoom = state.zoom * (1 - delta * ZOOM_SENSITIVITY);
+
+        var rect = interactionCanvas.getBoundingClientRect();
+        var mx = (e.clientX - rect.left) * (interactionCanvas.width / rect.width);
+        var my = (e.clientY - rect.top) * (interactionCanvas.height / rect.height);
+
+        zoomTo(newZoom, mx, my);
+    }, { passive: false });
+
+    // ── Double-click to Reset Zoom ──────────────────────────────
+
+    interactionCanvas.addEventListener("dblclick", function (e) {
+        if (!state.image) return;
+        e.preventDefault();
+        resetView();
+    });
+
+    // ── Touch Support ─────────────────────────────────────────────
+
+    var touchState = { lastDist: 0, lastCenterX: 0, lastCenterY: 0 };
+
+    function getTouchDistance(t1, t2) {
+        var dx = t1.clientX - t2.clientX;
+        var dy = t1.clientY - t2.clientY;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function getTouchCenter(t1, t2) {
+        return { x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 };
+    }
+
+    interactionCanvas.addEventListener("touchstart", function (e) {
+        if (!state.image) return;
+        e.preventDefault();
+
+        if (e.touches.length === 1) {
+            var pt = clientToCanvas(e.touches[0].clientX, e.touches[0].clientY);
+            var hitLayer = findLayerAt(pt.x, pt.y);
+
+            if (hitLayer) {
+                selectLayer(hitLayer.id);
+            } else {
+                state.isPanning = true;
+                state.panStartX = e.touches[0].clientX;
+                state.panStartY = e.touches[0].clientY;
+                state.panStartPanX = state.panX;
+                state.panStartPanY = state.panY;
+            }
+        } else if (e.touches.length === 2) {
+            state.isPanning = false;
+            touchState.lastDist = getTouchDistance(e.touches[0], e.touches[1]);
+            var center = getTouchCenter(e.touches[0], e.touches[1]);
+            touchState.lastCenterX = center.x;
+            touchState.lastCenterY = center.y;
+        }
+    }, { passive: false });
+
+    interactionCanvas.addEventListener("touchmove", function (e) {
+        if (!state.image) return;
+        e.preventDefault();
+
+        if (e.touches.length === 1 && state.isPanning) {
+            var dx = e.touches[0].clientX - state.panStartX;
+            var dy = e.touches[0].clientY - state.panStartY;
+
+            var rect = interactionCanvas.getBoundingClientRect();
+            state.panX = state.panStartPanX + dx * (interactionCanvas.width / rect.width);
+            state.panY = state.panStartPanY + dy * (interactionCanvas.height / rect.height);
+            clampPan();
+            render();
+        } else if (e.touches.length === 2) {
+            var dist = getTouchDistance(e.touches[0], e.touches[1]);
+            var center = getTouchCenter(e.touches[0], e.touches[1]);
+
+            if (touchState.lastDist > 0) {
+                var scale = dist / touchState.lastDist;
+                var newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, state.zoom * scale));
+
+                var rect = interactionCanvas.getBoundingClientRect();
+                var mx = (center.x - rect.left) * (interactionCanvas.width / rect.width);
+                var my = (center.y - rect.top) * (interactionCanvas.height / rect.height);
+
+                state.panX = mx - (mx - state.panX) * (newZoom / state.zoom);
+                state.panY = my - (my - state.panY) * (newZoom / state.zoom);
+
+                var panDx = (center.x - touchState.lastCenterX) * (interactionCanvas.width / rect.width);
+                var panDy = (center.y - touchState.lastCenterY) * (interactionCanvas.height / rect.height);
+                state.panX += panDx;
+                state.panY += panDy;
+
+                state.zoom = newZoom;
+                clampPan();
+                render();
+            }
+
+            touchState.lastDist = dist;
+            touchState.lastCenterX = center.x;
+            touchState.lastCenterY = center.y;
+        }
+    }, { passive: false });
+
+    interactionCanvas.addEventListener("touchend", function (e) {
+        if (!state.image) return;
+        e.preventDefault();
+
+        if (e.touches.length === 0) {
+            state.isPanning = false;
+            touchState.lastDist = 0;
+        } else if (e.touches.length === 1) {
+            state.isPanning = true;
+            state.panStartX = e.touches[0].clientX;
+            state.panStartY = e.touches[0].clientY;
+            state.panStartPanX = state.panX;
+            state.panStartPanY = state.panY;
+            touchState.lastDist = 0;
+        }
+    }, { passive: false });
+
+    // ── Keyboard Shortcuts ────────────────────────────────────────
+
+    element.setAttribute("tabindex", "0");
+    element.style.outline = "none";
+
+    element.addEventListener("keydown", function (e) {
+        if (!state.image) return;
+        if (e.target.tagName === "INPUT") return;
+
+        switch (e.key) {
+            case "v":
+            case "V":
+                setTool("select");
+                e.preventDefault();
+                break;
+            case "r":
+            case "R":
+                setTool("rect");
+                e.preventDefault();
+                break;
+            case "m":
+            case "M":
+                setTool("mask");
+                e.preventDefault();
+                break;
+            case "Delete":
+            case "Backspace":
+                if (state.selectedLayerId != null) {
+                    deleteLayer(state.selectedLayerId);
+                }
+                e.preventDefault();
+                break;
+            case "Escape":
+                state.selectedLayerId = null;
+                state.isDrawing = false;
+                render();
+                renderControlPanel();
+                e.preventDefault();
+                break;
+            case "+":
+            case "=":
+                zoomTo(state.zoom * 1.25);
+                e.preventDefault();
+                break;
+            case "-":
+            case "_":
+                zoomTo(state.zoom / 1.25);
+                e.preventDefault();
+                break;
+            case "0":
+                resetView();
+                e.preventDefault();
+                break;
+        }
+    });
+
+    // ── Window Resize ─────────────────────────────────────────────
+
+    var resizeTimer = null;
+    window.addEventListener("resize", function () {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () {
+            if (state.image) {
+                fitCanvas();
+                render();
+            }
+        }, 150);
+    });
+})();

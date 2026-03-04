@@ -8,3 +8,4 @@ test_*
 __pycache__
 *.ts
 *.pt
+*.pyi
