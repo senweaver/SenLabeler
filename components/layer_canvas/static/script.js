@@ -22,6 +22,9 @@
     var layerList = element.querySelector(".layer-list");
     var loadingIndicator = element.querySelector(".loading-indicator");
     var placeholder = element.querySelector(".placeholder");
+    var zoomIndicator = element.querySelector(".zoom-indicator");
+    var zoomValue = element.querySelector(".zoom-value");
+    var zoomResetBtn = element.querySelector(".zoom-reset-btn");
 
     // Toolbar buttons - match template classes
     var selectBtn = element.querySelector(".select-tool");
@@ -156,6 +159,7 @@
         controlPanel.classList.remove("visible");
         tooltip.classList.remove("visible");
         placeholder.classList.remove("hidden");
+        if (zoomIndicator) zoomIndicator.style.display = "none";
     }
 
     function showLoading() {
@@ -163,6 +167,7 @@
         canvasWrapper.style.display = "none";
         controlPanel.classList.remove("visible");
         loadingIndicator.classList.add("visible");
+        if (zoomIndicator) zoomIndicator.style.display = "none";
     }
 
     function showContent() {
@@ -170,6 +175,8 @@
         loadingIndicator.classList.remove("visible");
         canvasWrapper.style.display = "flex";
         controlPanel.classList.add("visible");
+        if (zoomIndicator) zoomIndicator.style.display = "flex";
+        updateZoomIndicator();
     }
 
     // ── Canvas Sizing ─────────────────────────────────────────────
@@ -241,6 +248,7 @@
         state.zoom = newZoom;
 
         clampPan();
+        updateZoomIndicator();
         render();
     }
 
@@ -248,7 +256,14 @@
         state.zoom = 1;
         state.panX = 0;
         state.panY = 0;
+        updateZoomIndicator();
         render();
+    }
+
+    function updateZoomIndicator() {
+        if (zoomValue) {
+            zoomValue.textContent = Math.round(state.zoom * 100) + "%";
+        }
     }
 
     // ── Rendering ─────────────────────────────────────────────────
@@ -813,6 +828,10 @@
     });
 
     if (resetViewBtn) resetViewBtn.addEventListener("click", function () {
+        resetView();
+    });
+
+    if (zoomResetBtn) zoomResetBtn.addEventListener("click", function () {
         resetView();
     });
 
