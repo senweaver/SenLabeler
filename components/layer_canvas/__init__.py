@@ -72,19 +72,70 @@ class LayerCanvas(gr.HTML):
             **kwargs
         )
     
-    def preprocess(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        if payload is None:
-            return (None, [])
+    def preprocess(self, payload: str) -> tuple[str | Path | Image.Image | np.ndarray, list[dict[str, Any]]] | None:
+        data = json.loads(payload)
+        image = data.get("image")
+        layers = data.get("layers", [])
+
+        result = []
+        if self.image is None:
+            return None
+
+        width, height = self.image.size
+
+        for annotation in self.annotations:
+            if annotation.get("mode") == "M":
+                result.append(annotation)
         
-        return payload
+        for layer in layers:
+            mode = layer.get("type")
+            label = layer.get("name")
+            data = layer.get("data")
+            if (mode == "rectangle"):
+                points = [
+                    (data.get("x") / width, data.get("y") / height),
+                    ((data.get("x") + data.get("width")) / width, (data.get("y") + data.get("height")) / height)
+                    ]
+                result.append({
+                    "mode": "R",
+                    "class": label,
+                    "points": points
+                })
+
+        
+        return (image, result)
     
     def postprocess(self, value: tuple[str | Path | Image.Image | np.ndarray, list[dict[str, Any]]] | None) -> str | None:
         if value is None:
+            self.image = None
+            self.annotations = []
             return None
 
         image_src, annotations = value
         img = _load_image(image_src)
         image_url = _save_image_to_cache(img, self.GRADIO_CACHE)
+        width, height = img.size
 
-        result: dict[str, Any] = {"image": image_url, "annotations": annotations}
+        self.image = img
+        self.annotations = annotations
+
+        layers = []
+        index = 0
+        for annotation in annotations:
+            if (annotation.get("mode") == "R"):
+                points: list[tuple[float, float]] = annotation.get("points", [])
+                layers.append({
+                    "id": index,
+                    "type": "rectangle",
+                    "name": annotation.get("class", ""),
+                    "data": {
+                        "x": points[0][0] * width,
+                        "y": points[0][1] * height,
+                        "width": (points[1][0] - points[0][0]) * width,
+                        "height": (points[1][1] - points[0][1]) * height,
+                    }
+                })
+                index += 1
+
+        result: dict[str, Any] = {"image": image_url, "layers": layers}
         return json.dumps(result)

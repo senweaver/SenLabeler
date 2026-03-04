@@ -35,7 +35,6 @@
     var addRectBtn = element.querySelector(".add-rect-btn");
     var addMaskBtn = element.querySelector(".add-mask-btn");
     var clearAllBtn = element.querySelector(".clear-all-btn");
-    var resetViewBtn = element.querySelector(".reset-view-btn");
     var exportJsonBtn = element.querySelector(".export-json-btn");
 
     // ── State ──────────────────────────────────────────────────────
@@ -124,28 +123,40 @@
 
         showLoading();
 
-        var img = new Image();
-        img.onload = function () {
-            state.image = img;
-            // Load existing layers if provided
-            state.layers = data.layers || [];
-            // Assign IDs to layers without them
-            for (var i = 0; i < state.layers.length; i++) {
-                if (!state.layers[i].id) {
-                    state.layers[i].id = state.nextLayerId++;
+        if (!state.image || state.image.src != data.image) {
+            var img = new Image();
+            img.onload = function () {
+                state.image = img;
+                // Load existing layers if provided
+                state.layers = data.layers || [];
+                // Assign IDs to layers without them
+                for (var i = 0; i < state.layers.length; i++) {
+                    if (!state.layers[i].id) {
+                        state.layers[i].id = state.nextLayerId++;
+                    }
+                    if (!state.layers[i].visible) {
+                        state.layers[i].visible = true;
+                    }
                 }
-            }
-            state.selectedLayerId = null;
-
+                state.selectedLayerId = null;
+        
+                showContent();
+                requestAnimationFrame(function () {
+                    fitCanvas();
+                    resetView();
+                    render();
+                    renderControlPanel();
+                });
+            };
+            img.src = data.image;
+        } else {
             showContent();
             requestAnimationFrame(function () {
                 fitCanvas();
-                resetView();
                 render();
                 renderControlPanel();
             });
-        };
-        img.src = data.image;
+        }
     }
 
     // ── Display States: placeholder / loading / content ──────────
@@ -159,7 +170,7 @@
         controlPanel.classList.remove("visible");
         tooltip.classList.remove("visible");
         placeholder.classList.remove("hidden");
-        if (zoomIndicator) zoomIndicator.style.display = "none";
+        zoomIndicator.style.display = "none";
     }
 
     function showLoading() {
@@ -167,7 +178,7 @@
         canvasWrapper.style.display = "none";
         controlPanel.classList.remove("visible");
         loadingIndicator.classList.add("visible");
-        if (zoomIndicator) zoomIndicator.style.display = "none";
+        zoomIndicator.style.display = "none";
     }
 
     function showContent() {
@@ -175,7 +186,7 @@
         loadingIndicator.classList.remove("visible");
         canvasWrapper.style.display = "flex";
         controlPanel.classList.add("visible");
-        if (zoomIndicator) zoomIndicator.style.display = "flex";
+        zoomIndicator.style.display = "flex";
         updateZoomIndicator();
     }
 
@@ -827,10 +838,6 @@
         }
     });
 
-    if (resetViewBtn) resetViewBtn.addEventListener("click", function () {
-        resetView();
-    });
-
     if (zoomResetBtn) zoomResetBtn.addEventListener("click", function () {
         resetView();
     });
@@ -842,17 +849,9 @@
     function exportData() {
         var data = {
             image: state.image ? state.image.src : null,
-            layers: state.layers.map(function (l) {
-                return {
-                    type: l.type,
-                    name: l.name,
-                    color: l.color,
-                    data: l.data
-                };
-            })
+            layers: state.layers
         };
-        console.log("Export data:", data);
-        alert("数据已导出到控制台。");
+        props.value = JSON.stringify(data)
     }
 
     // ── Canvas Mouse Interaction ──────────────────────────────────

@@ -1,0 +1,18 @@
+# Web UI Framework
+gradio>=4.0.0
+gradio-image-annotation
+
+# Deep Learning Framework
+torch>=2.0.0
+ultralytics>=8.3.0
+
+# Transformers (for Grounding-DINO and OWLV2)
+transformers>=4.40.0
+
+# Image Processing
+Pillow>=9.0.0
+opencv-python>=4.5.0
+numpy>=1.21.0
+
+# COCO Tools
+pycocotools>=2.0.6
