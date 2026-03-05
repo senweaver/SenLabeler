@@ -21,6 +21,13 @@ def load_annotations(file_path: str) -> list[dict[str, Any]]:
                         "class": class_name,
                         "points": [(float(x1), float(y1)), (float(x2), float(y2))]
                     })
+                if mode == 'P': # 多边形区域
+                    coords = [float(x) for x in data.split(" ")]
+                    annotation.append({
+                        "mode": "P",
+                        "class": class_name,
+                        "points": [(x, y) for x, y in zip(coords[0::2], coords[1::2])]
+                    })
                 elif mode == 'M': # 遮罩
                     [x1, y1, x2, y2, width, height, compressed] = data.split(" ")
                     mask_arr = mask_utils.decode({"counts": compressed, "size": [int(height), int(width)]})
@@ -39,6 +46,9 @@ def save_annotations(file_path: str, annotations: list[dict[str, Any]]):
     for annotation in annotations:
         if annotation['mode'] == 'R':
             text += f"R {annotation['class']} {annotation['points'][0][0]} {annotation['points'][0][1]} {annotation['points'][1][0]} {annotation['points'][1][1]}\n"
+        if annotation['mode'] == 'P':
+            points_str = " ".join([f"{x} {y}" for x, y in annotation['points']])
+            text += f"R {annotation['class']} {points_str}\n"
         elif annotation['mode'] == 'M':
             mask = annotation['mask']
             decoded = rle_decode(mask['counts'], mask['size'][1], mask['size'][0])

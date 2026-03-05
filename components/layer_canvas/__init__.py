@@ -101,6 +101,15 @@ class LayerCanvas(gr.HTML):
                     "class": label,
                     "points": points
                 })
+            elif (mode == "mask"):
+                points = []
+                for point in data.get("points", []):
+                    points.append((point.get("x") / width, point.get("y") / height))
+                result.append({
+                    "mode": "P",
+                    "class": label,
+                    "points": points
+                })
 
         
         return (image, result)

@@ -5,6 +5,7 @@ from PIL import Image
 from preannotate_model import PreannotateModel
 from gradio_image_annotation import image_annotator
 from components.detection_viewer import DetectionViewer
+from components.layer_canvas import LayerCanvas
 from utils import load_annotations, save_annotations
 
 DATA_PATH = './data'
@@ -39,15 +40,6 @@ def dataset_select_change(name, state):
 
     return state
 
-def dataset_config_type_change(type, state):
-    config : DatasetConfig
-    config = state['config']
-    config.type = type
-
-    config.save_to_file()
-    
-    return state
-
 def dataset_classes_change(data, state):
     config : DatasetConfig
     config = state['config']
@@ -79,7 +71,7 @@ def gallery_select(image_list, state, annotated_state, evt: gr.SelectData):
 
 def annotated_state_change(annotated_state):
     if annotated_state is None:
-        return (None, []), gr.update(value=(None, [])), gr.update(value=[]), gr.update(interactive=False)
+        return (None, []), None, gr.update(value=(None, [])), gr.update(value=[]), gr.update(interactive=False)
 
     image: Image.Image
     image = annotated_state['image']
@@ -148,7 +140,7 @@ def annotated_state_change(annotated_state):
         
         annotation_df.append([id, class_name])
 
-    return (image, preannotation), (image, image_annotations), gr.update(value=annotation_df), gr.update(interactive=len(preannotate_result) > 0)
+    return (image, preannotation), (image, annotations), (image, image_annotations), gr.update(value=annotation_df), gr.update(interactive=len(preannotate_result) > 0)
 
 
 def state_change(state):
@@ -164,7 +156,7 @@ def state_change(state):
         label_colors.append(colors[index % len(colors)])
 
     return (
-        gr.update(value=config.type, visible=True), gr.update(value=config.classes, visible=True),
+        gr.update(value=config.classes, visible=True),
         gr.update(visible=show), None, state['images'], gr.update(choices=label_list), gr.update(label_list=label_list, label_colors=label_colors),
         gr.update(visible=show)
     )
@@ -194,13 +186,19 @@ def preannotate_save_click(annotated_state, threshold):
     gr.Success("操作成功")
     return annotated_state
 
+def manual_annotator_change(annotated_state, annotator_data):
+    annotated_state['annotation'] = annotator_data[1]
+    return annotated_state
+
+def export_btn_click(state, annotated_state, export_format, export_type):
+    pass
+
 with gr.Blocks() as app:
     state = gr.State({})
     with gr.Tab("数据集管理") as dataset_tab:
         dataset_refresh_btn = gr.Button("刷新")
         dataset_select = gr.Dropdown(choices = get_datasets(), value=None, label="选择数据集", interactive=True, buttons = [dataset_refresh_btn])
-        dataset_config_type = gr.Radio(choices = ["rect", "mask"], value="rect", label="数据集类型", interactive=True, visible=False)
-        dataset_config_classes = gr.Dataframe(label="数据集类别", headers=["类别", "提示语"], type="array", interactive=True, visible=False)
+        dataset_config_classes = gr.Dataframe(label="数据集类别", headers=["类别"], type="array", interactive=True, visible=False)
     with gr.Tab("工作区", visible=False) as work_tab:
         annotated_state = gr.State(None)
         gallery = gr.Gallery(label="图片", allow_preview=False, columns = 7, height = 200, type="pil", interactive=True)
@@ -217,7 +215,15 @@ with gr.Blocks() as app:
                         preannotate_all_btn = gr.Button("预标注全部图片")
                 with gr.Column(scale = 2):
                     preannotate_viewer = DetectionViewer(label="标注预览")
-        with gr.Tab("交互式标注"):
+        #with gr.Tab("AI交互式标注"):
+            #gr.Markdown("敬请期待")
+            #with gr.Row():
+            #    annotate_mode = gr.Dropdown(choices = ["手动", "AI一对一", "AI一对多"], value=None, label="标注模式", interactive=True)
+            #    annotate_model = gr.Dropdown(choices = [], value=None, label="使用模型", interactive=True, visible=False)
+        with gr.Tab("手工标注"):
+            with gr.Row():
+                manual_annotator = LayerCanvas(label="标注情况")
+        with gr.Tab("标注管理"):
             with gr.Row():
                 annotated_image = DetectionViewer(label="标注情况")
                 annotator = image_annotator(
@@ -232,25 +238,28 @@ with gr.Blocks() as app:
                     boxes_alpha = 0.4,
                     visible = False)
                 annotated_df = gr.Dataframe(label="标注列表", headers=["ID", "类别"], type="array", interactive=True)
-            with gr.Row():
-                annotate_mode = gr.Dropdown(choices = ["手动", "AI一对一", "AI一对多"], value=None, label="标注模式", interactive=True)
-                annotate_model = gr.Dropdown(choices = [], value=None, label="使用模型", interactive=True, visible=False)
     with gr.Tab("导出/训练", visible=False) as export_tab:
-        gr.Markdown("导出/训练")
+        with gr.Group():
+            export_format = gr.Dropdown(choices=["COCO"], label="导出格式")
+            export_type = gr.Dropdown(choices=["矩形框", "遮罩"], label="导出类型")
+            export_btn = gr.Button("导出")
 
     # events
     dataset_refresh_btn.click(fn=lambda: gr.update(choices = get_datasets(), interactive=True), inputs=None, outputs=[dataset_select])
     dataset_select.change(fn=dataset_select_change, inputs=[dataset_select, state], outputs=[state])
-    dataset_config_type.change(fn=dataset_config_type_change, inputs=[dataset_config_type, state], outputs=[state])
     dataset_config_classes.change(fn=dataset_classes_change, inputs=[dataset_config_classes, state], outputs=[state])
 
     preannotate_btn.click(fn=preannotate_click, inputs=[preannotate_model, preannotate_prompt, preannotate_class_name, annotated_state], outputs=[annotated_state])
     preannotate_save_btn.click(fn=preannotate_save_click, inputs=[annotated_state, preannotate_threshold], outputs=[annotated_state])
 
-    gallery.select(fn=gallery_select, inputs=[gallery, state, annotated_state], outputs=[annotated_state])
-    annotated_state.change(annotated_state_change, annotated_state, [preannotate_viewer, annotated_image, annotated_df, preannotate_save_btn])
+    manual_annotator.change(manual_annotator_change, [annotated_state, manual_annotator], [annotated_state])
 
-    state.change(state_change, state, [dataset_config_type, dataset_config_classes, work_tab, annotated_state, gallery, preannotate_class_name, annotator, export_tab])
+    export_btn.click(export_btn_click, [state, annotated_state, export_format, export_type], [])
+
+    gallery.select(fn=gallery_select, inputs=[gallery, state, annotated_state], outputs=[annotated_state])
+    annotated_state.change(annotated_state_change, annotated_state, [preannotate_viewer, manual_annotator, annotated_image, annotated_df, preannotate_save_btn])
+
+    state.change(state_change, state, [dataset_config_classes, work_tab, annotated_state, gallery, preannotate_class_name, annotator, export_tab])
 
 if __name__ == "__main__":
     app.launch(server_name="0.0.0.0", server_port=8080, share=False)
