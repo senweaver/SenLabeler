@@ -1,4 +1,4 @@
-# Welding Defect Annotation Tool
+# SenLabeler
 
 <div align="center">
 
@@ -7,7 +7,7 @@
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red?logo=pytorch)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-**基于 AI 预标注的焊接缺陷图像标注工具**
+**基于 AI 预标注的图像标注工具**
 
 [功能特性](#功能特性) • [快速开始](#快速开始) • [使用指南](#使用指南) • [模型支持](#模型支持) • [项目结构](#项目结构)
 
@@ -17,15 +17,13 @@
 
 ## 📖 项目简介
 
-本工具是一个专为焊接缺陷检测设计的图像标注平台，集成了多种先进的视觉大模型，支持 AI 辅助预标注，大幅提升标注效率。基于 Gradio 构建友好的 Web 界面，支持矩形框和遮罩两种标注模式。
+本工具是一个图像标注平台，集成了多种先进的视觉大模型，支持 AI 辅助预标注，大幅提升标注效率。基于 Gradio 构建友好的 Web 界面，支持矩形框和遮罩两种标注模式。
 
 ## ✨ 功能特性
 
 ### 🗂️ 数据集管理
 - 创建和管理多个数据集项目
 - 支持矩形框（rect）和遮罩（mask）两种标注类型
-- 灵活的类别配置，支持为每个类别设置提示语
-- 图片批量导入和预览
 
 ### 🤖 AI 预标注
 集成多种视觉大模型，支持零样本/开放词汇目标检测：
@@ -61,14 +59,14 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-username/welding.git
-cd welding
+git clone https://github.com/senweaver/SenLabeler.git
+cd SenLabeler
 
 # 安装依赖
 pip install -r requirements.txt
 
 # 下载模型文件（可选，首次运行时会自动下载）
-# 将模型文件放置在 ./models/ 目录下
+# SAM3模型需要手动下载
 ```
 
 ### 启动服务
@@ -90,42 +88,24 @@ python main.py
 ```
 data/
 ├── my_dataset/           # 数据集名称
-│   ├── config.json       # 数据集配置
+│   ├── config.json       # 数据集配置（可选）
 │   └── images/           # 图片目录
 │       ├── image1.png
 │       ├── image1.txt    # 标注文件（可选）
 │       └── ...
 ```
 
-### 2. 配置数据集
+### 2. AI 预标注流程
 
-`config.json` 配置示例：
-
-```json
-{
-    "type": "rect",
-    "classes": [
-        ["defect_crack", "crack, fissure"],
-        ["defect_pore", "pore, hole, void"],
-        ["defect_slag", "slag inclusion"]
-    ]
-}
-```
-
-- `type`: 标注类型，可选 `rect`（矩形框）或 `mask`（遮罩）
-- `classes`: 类别列表，每个类别包含 `[类别名称, 提示语]`
-
-### 3. AI 预标注流程
-
-1. **选择数据集** - 在"数据集管理"标签页选择要标注的数据集
+1. **选择数据集** - 在"数据集管理"标签页选择要标注的数据集，设置好数据集的类别
 2. **进入工作区** - 切换到"工作区"标签页
 3. **选择图片** - 从图片列表中选择要标注的图片
 4. **配置模型** - 选择预标注模型，输入提示语，指定目标类别
 5. **执行预标注** - 点击"标注当前图片"按钮
 6. **审核调整** - 在标注预览中查看结果，调整置信度阈值
-7. **保存标注** - 点击"保存当前图片标注"保存结果
+7. **保存标注** - 点击"保存当前图片标注"保存结果，或点击"预标注全部图片"对当前数据集的图片进行预标注
 
-### 4. 标注文件格式
+### 3. 标注文件格式
 
 标注文件采用简单文本格式（`.txt`）：
 
@@ -139,83 +119,19 @@ R class_name x1 y1 x2 y2
 M class_name x1 y1 x2 y2 width height rle_counts
 ```
 
-其中坐标为归一化坐标（0-1），遮罩使用 RLE 编码。
-
----
-
-## 🔧 自定义组件
-
-### DetectionViewer
-
-用于显示检测结果的自定义 Gradio 组件：
-
-```python
-from components.detection_viewer import DetectionViewer
-
-viewer = DetectionViewer(
-    label="检测结果",
-    panel_title="检测列表",
-    list_height=300,
-    score_threshold=(0.3, 1.0)
-)
-
-# 输入格式
-value = (
-    image,  # PIL.Image 或图片路径
-    [
-        {
-            "bbox": {"x": 100, "y": 100, "width": 50, "height": 50},
-            "label": "defect",
-            "score": 0.95,
-            "mask": {"counts": [...], "size": [height, width]}  # 可选
-        },
-        # ... 更多检测结果
-    ]
-)
+**多边形格式：**
+```
+P class_name x1 y1 x2 y2 x3 y3 ...
 ```
 
-### LayerCanvas
-
-多图层画布组件，支持背景图、矩形、遮罩叠加显示：
-
-```python
-from components.layer_canvas import LayerCanvas
-
-canvas = LayerCanvas(
-    height=500,
-    width=None,
-    show_controls=True,
-    editable=True,
-    min_zoom=1.0,
-    max_zoom=10.0,
-    background_color="#1a1a1a"
-)
-
-# 输入格式
-value = (
-    image,  # PIL.Image 或图片路径
-    [
-        {
-            "mode": "R",  # 矩形框
-            "class": "defect",
-            "points": [(x1, y1), (x2, y2)]  # 归一化坐标
-        },
-        {
-            "mode": "M",  # 遮罩
-            "class": "defect",
-            "points": [(x1, y1), (x2, y2)],
-            "mask": {"counts": [...], "size": [height, width]}
-        }
-    ]
-)
-```
+其中坐标为归一化坐标（0-1），遮罩使用 RLE 压缩编码。
 
 ---
 
 ## 📁 项目结构
 
 ```
-welding/
+SenLabeler/
 ├── main.py                 # 应用入口
 ├── preannotate_model.py    # AI 模型推理封装
 ├── ds_config.py            # 数据集配置管理
@@ -249,7 +165,6 @@ welding/
 │   └── models--IDEA-Research--grounding-dino-base/
 │
 ├── output/                 # 输出目录
-└── runs/                   # 运行结果目录
 ```
 
 ---
@@ -293,8 +208,15 @@ welding/
 
 ---
 
+## 📞 联系我们
+
+- **官网**: [https://www.senweaver.com](https://www.senweaver.com)
+- **GitHub**: [https://github.com/senweaver/SenLabeler](https://github.com/senweaver/SenLabeler)
+
+---
+
 <div align="center">
 
-**[⬆ 返回顶部](#welding-defect-annotation-tool)**
+**[⬆ 返回顶部](#SenLabeler)**
 
 </div>
