@@ -2,6 +2,7 @@ import os
 from pycocotools import mask as mask_utils
 from typing import Any
 import numpy as np
+import cv2
 
 def load_annotations(file_path: str) -> list[dict[str, Any]]:
     annotation = []
@@ -46,9 +47,9 @@ def save_annotations(file_path: str, annotations: list[dict[str, Any]]):
     for annotation in annotations:
         if annotation['mode'] == 'R':
             text += f"R {annotation['class']} {annotation['points'][0][0]} {annotation['points'][0][1]} {annotation['points'][1][0]} {annotation['points'][1][1]}\n"
-        if annotation['mode'] == 'P':
+        elif annotation['mode'] == 'P':
             points_str = " ".join([f"{x} {y}" for x, y in annotation['points']])
-            text += f"R {annotation['class']} {points_str}\n"
+            text += f"P {annotation['class']} {points_str}\n"
         elif annotation['mode'] == 'M':
             mask = annotation['mask']
             decoded = rle_decode(mask['counts'], mask['size'][1], mask['size'][0])
@@ -79,3 +80,9 @@ def rle_decode(encoded: list[int], width: int, height: int) -> np.ndarray:
     mask_arr = np.ascontiguousarray(mask_arr)
     
     return mask_arr
+
+def polygon2mask(points: list[tuple[float, float]], width: int, height: int) -> np.ndarray:
+    blank = np.zeros(shape=(height, width, 1), dtype=np.uint8)
+    pts = np.array([[int(round(x * width)), int(round(y * height))] for x, y in points], dtype=np.int32)
+    mask = cv2.fillPoly(blank, [pts], 1)
+    return mask

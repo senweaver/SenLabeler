@@ -3,10 +3,10 @@ import os
 from ds_config import DatasetConfig
 from PIL import Image
 from preannotate_model import PreannotateModel
-from gradio_image_annotation import image_annotator
 from components.detection_viewer import DetectionViewer
 from components.layer_canvas import LayerCanvas
-from utils import load_annotations, save_annotations
+from utils import load_annotations, save_annotations, polygon2mask, rle_encode
+from export import export
 
 DATA_PATH = './data'
 preannotateModel = PreannotateModel()
@@ -137,6 +137,27 @@ def annotated_state_change(annotated_state):
                 "mask": annotation['mask'],
                 "label": class_name
             })
+        elif mode == 'P':
+            xmin, ymin = annotation['points'][0][0], annotation['points'][0][1]
+            xmax, ymax = xmin, ymin
+            for x, y in annotation['points'][1:]:
+                xmin = min(x, xmin)
+                ymin = min(y, ymin)
+                xmax = max(x, xmax)
+                ymax = max(y, ymax)
+
+            mask = polygon2mask(annotation['points'], width, height)
+            rle = rle_encode(mask)
+            image_annotations.append({
+                "bbox": {
+                    "x": int(round(xmin * width)),
+                    "y": int(round(ymin * height)),
+                    "width": int(round((xmax - xmin) * width)),
+                    "height": int(round((ymax - ymin) * height))
+                    },
+                "mask": {"counts": rle, "size": [height, width]},
+                "label": class_name
+            })
         
         annotation_df.append([id, class_name])
 
@@ -157,7 +178,7 @@ def state_change(state):
 
     return (
         gr.update(value=config.classes, visible=True),
-        gr.update(visible=show), None, state['images'], gr.update(choices=label_list), gr.update(label_list=label_list, label_colors=label_colors),
+        gr.update(visible=show), None, state['images'], gr.update(choices=label_list),
         gr.update(visible=show)
     )
 
@@ -191,7 +212,11 @@ def manual_annotator_change(annotated_state, annotator_data):
     return annotated_state
 
 def export_btn_click(state, annotated_state, export_format, export_type):
-    pass
+    success, msg, out_dir = export(state['name'], export_format, export_type)
+    if success:
+        gr.Success(f"导出成功，保存目录：{out_dir}")
+    else:
+        gr.Warning(f"导出失败，失败信息：{msg}")
 
 with gr.Blocks() as app:
     state = gr.State({})
@@ -226,22 +251,11 @@ with gr.Blocks() as app:
         with gr.Tab("标注管理"):
             with gr.Row():
                 annotated_image = DetectionViewer(label="标注情况")
-                annotator = image_annotator(
-                    value={"image": blank},
-                    label_list=[],
-                    label_colors=[],
-                    box_thickness = 1,
-                    box_selected_thickness = 2,
-                    handle_size = 5,
-                    label = "图片标注",
-                    show_download_button = False,
-                    boxes_alpha = 0.4,
-                    visible = False)
                 annotated_df = gr.Dataframe(label="标注列表", headers=["ID", "类别"], type="array", interactive=True)
     with gr.Tab("导出/训练", visible=False) as export_tab:
         with gr.Group():
             export_format = gr.Dropdown(choices=["COCO"], label="导出格式")
-            export_type = gr.Dropdown(choices=["矩形框", "遮罩"], label="导出类型")
+            export_type = gr.Dropdown(choices=[("矩形框", "rect"), ("遮罩", "mask")], label="导出类型")
             export_btn = gr.Button("导出")
 
     # events
@@ -259,7 +273,7 @@ with gr.Blocks() as app:
     gallery.select(fn=gallery_select, inputs=[gallery, state, annotated_state], outputs=[annotated_state])
     annotated_state.change(annotated_state_change, annotated_state, [preannotate_viewer, manual_annotator, annotated_image, annotated_df, preannotate_save_btn])
 
-    state.change(state_change, state, [dataset_config_classes, work_tab, annotated_state, gallery, preannotate_class_name, annotator, export_tab])
+    state.change(state_change, state, [dataset_config_classes, work_tab, annotated_state, gallery, preannotate_class_name, export_tab])
 
 if __name__ == "__main__":
     app.launch(server_name="0.0.0.0", server_port=8080, share=False)

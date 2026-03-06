@@ -1,6 +1,5 @@
 # Web UI Framework
 gradio>=4.0.0
-gradio-image-annotation
 
 # Deep Learning Framework
 torch>=2.0.0

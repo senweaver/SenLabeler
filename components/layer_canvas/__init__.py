@@ -132,7 +132,7 @@ class LayerCanvas(gr.HTML):
         index = 0
         for annotation in annotations:
             if (annotation.get("mode") == "R"):
-                points: list[tuple[float, float]] = annotation.get("points", [])
+                points = annotation.get("points", [])
                 layers.append({
                     "id": index,
                     "type": "rectangle",
@@ -143,6 +143,15 @@ class LayerCanvas(gr.HTML):
                         "width": (points[1][0] - points[0][0]) * width,
                         "height": (points[1][1] - points[0][1]) * height,
                     }
+                })
+                index += 1
+            elif (annotation.get("mode") == "P"):
+                points = [{"x": x * width, "y": y * height} for x, y in annotation.get("points", [])]
+                layers.append({
+                    "id": index,
+                    "type": "mask",
+                    "name": annotation.get("class", ""),
+                    "data": { "points": points }
                 })
                 index += 1
 
