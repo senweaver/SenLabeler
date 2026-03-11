@@ -44,6 +44,7 @@
     var state = {
         image: null,
         layers: [],           // Array of layer objects: { id, type, name, visible, data }
+        labels: [],           // Available labels for dropdown
         scale: 1,             // Canvas scale relative to image
         zoom: 1,              // User zoom level
         panX: 0,
@@ -131,6 +132,7 @@
                 state.image = img;
                 // Load existing layers if provided
                 state.layers = data.layers || [];
+                state.labels = data.labels || [];
                 // Assign IDs to layers without them
                 for (var i = 0; i < state.layers.length; i++) {
                     if (!state.layers[i].id) {
@@ -533,7 +535,29 @@
             html += '<div class="layer-item' + (isSelected ? ' active' : '') + '" data-id="' + layer.id + '">';
             html += '<span class="layer-icon">' + icon + '</span>';
             html += '<input type="color" class="layer-color-picker" data-id="' + layer.id + '" value="' + layer.color + '" title="Change color">';
-            html += '<span class="layer-name">' + escapeHtml(layer.name) + '</span>';
+            // Render label dropdown or text input
+            if (state.labels && state.labels.length > 0) {
+                html += '<select class="layer-label-select" data-id="' + layer.id + '" title="Select label">';
+                // Check if current layer name is in labels list
+                var currentNameInLabels = false;
+                for (var k = 0; k < state.labels.length; k++) {
+                    if (state.labels[k] === layer.name) {
+                        currentNameInLabels = true;
+                        break;
+                    }
+                }
+                // If name is not in labels, show it as first option
+                if (layer.name && !currentNameInLabels) {
+                    html += '<option value="' + escapeHtml(layer.name) + '" selected>' + escapeHtml(layer.name) + '</option>';
+                }
+                for (var j = 0; j < state.labels.length; j++) {
+                    var labelOption = state.labels[j];
+                    html += '<option value="' + escapeHtml(labelOption) + '"' + (layer.name === labelOption ? ' selected' : '') + '>' + escapeHtml(labelOption) + '</option>';
+                }
+                html += '</select>';
+            } else {
+                html += '<input type="text" class="layer-name-input" data-id="' + layer.id + '" value="' + escapeHtml(layer.name || '') + '" placeholder="Label name" title="Enter label name">';
+            }
             html += '<div class="layer-controls">';
             html += '<button class="layer-btn visibility-btn' + (layer.visible ? '' : ' hidden') + '" data-id="' + layer.id + '" title="Toggle visibility">' + (layer.visible ? '&#128065;' : '&#128065;&#8205;&#128488;') + '</button>';
             html += '<button class="layer-btn delete-btn" data-id="' + layer.id + '" title="Delete">&#128465;</button>';
@@ -575,6 +599,40 @@
                 if (layer) {
                     layer.color = this.value;
                     render();
+                }
+            });
+        }
+
+        // Label dropdown in layer list
+        var labelSelects = layerList.querySelectorAll(".layer-label-select");
+        for (var i = 0; i < labelSelects.length; i++) {
+            labelSelects[i].addEventListener("click", function (e) {
+                e.stopPropagation();
+            });
+            labelSelects[i].addEventListener("change", function (e) {
+                e.stopPropagation();
+                var id = parseInt(this.getAttribute("data-id"), 10);
+                var layer = findLayerById(id);
+                if (layer) {
+                    layer.name = this.value;
+                    triggerChange();
+                }
+            });
+        }
+
+        // Name input in layer list (when no labels provided)
+        var nameInputs = layerList.querySelectorAll(".layer-name-input");
+        for (var i = 0; i < nameInputs.length; i++) {
+            nameInputs[i].addEventListener("click", function (e) {
+                e.stopPropagation();
+            });
+            nameInputs[i].addEventListener("input", function (e) {
+                e.stopPropagation();
+                var id = parseInt(this.getAttribute("data-id"), 10);
+                var layer = findLayerById(id);
+                if (layer) {
+                    layer.name = this.value;
+                    triggerChange();
                 }
             });
         }

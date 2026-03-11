@@ -47,12 +47,14 @@ class LayerCanvas(gr.HTML):
         max_zoom: float = 10.0,
         background_color: str = "#1a1a1a",
         label: Optional[str] = None,
+        labels: Optional[List[str]] = None,
         **kwargs
     ):
         html_template = (_STATIC_DIR / "template.html").read_text(encoding="utf-8")
         css_template = (_STATIC_DIR / "style.css").read_text(encoding="utf-8")
         js_on_load = (_STATIC_DIR / "script.js").read_text(encoding="utf-8")
         
+        self.labels = labels if labels else []
         has_label = label is not None
         super().__init__(
             value=value,
@@ -69,6 +71,7 @@ class LayerCanvas(gr.HTML):
             min_zoom = min_zoom,
             max_zoom = max_zoom,
             background_color = background_color,
+            labels = json.dumps(self.labels) if self.labels else "[]",
             **kwargs
         )
     
@@ -155,5 +158,5 @@ class LayerCanvas(gr.HTML):
                 })
                 index += 1
 
-        result: dict[str, Any] = {"image": image_url, "layers": layers}
+        result: dict[str, Any] = {"image": image_url, "layers": layers, "labels": self.labels}
         return json.dumps(result)

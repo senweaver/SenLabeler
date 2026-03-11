@@ -178,7 +178,7 @@ def state_change(state):
 
     return (
         gr.update(value=config.classes, visible=True),
-        gr.update(visible=show), None, state['images'], gr.update(choices=label_list),
+        gr.update(visible=show), None, state['images'], gr.update(choices=label_list), gr.update(labels=label_list),
         gr.update(visible=show)
     )
 
@@ -281,7 +281,7 @@ with gr.Blocks() as app:
     gallery.select(fn=gallery_select, inputs=[gallery, state, annotated_state], outputs=[annotated_state])
     annotated_state.change(annotated_state_change, annotated_state, [preannotate_viewer, manual_annotator, annotated_image, annotated_df, preannotate_save_btn])
 
-    state.change(state_change, state, [dataset_config_classes, work_tab, annotated_state, gallery, preannotate_class_name, export_tab])
+    state.change(state_change, state, [dataset_config_classes, work_tab, annotated_state, gallery, preannotate_class_name, manual_annotator, export_tab])
 
 if __name__ == "__main__":
     app.launch(server_name="0.0.0.0", server_port=8080, share=False)

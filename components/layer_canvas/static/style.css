@@ -353,6 +353,51 @@
     white-space: nowrap;
 }
 
+.layer-canvas-container .layer-label-select {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: var(--body-text-color, #e0e0e0);
+    background-color: var(--input-background-fill, #2a2a2a);
+    border: 1px solid var(--input-border-color, #444);
+    border-radius: 4px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.15s, background-color 0.15s;
+}
+
+.layer-canvas-container .layer-label-select:hover {
+    border-color: var(--button-primary-border-color-hover, #6b9fff);
+}
+
+.layer-canvas-container .layer-label-select:focus {
+    border-color: var(--button-primary-border-color-hover, #6b9fff);
+    background-color: var(--input-background-fill-focus, #333);
+}
+
+.layer-canvas-container .layer-name-input {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: var(--body-text-color, #e0e0e0);
+    background-color: var(--input-background-fill, #2a2a2a);
+    border: 1px solid var(--input-border-color, #444);
+    border-radius: 4px;
+    outline: none;
+    transition: border-color 0.15s, background-color 0.15s;
+}
+
+.layer-canvas-container .layer-name-input:hover {
+    border-color: var(--button-primary-border-color-hover, #6b9fff);
+}
+
+.layer-canvas-container .layer-name-input:focus {
+    border-color: var(--button-primary-border-color-hover, #6b9fff);
+    background-color: var(--input-background-fill-focus, #333);
+}
+
 .layer-canvas-container .layer-controls {
     display: flex;
     gap: 2px;
