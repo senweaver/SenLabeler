@@ -132,12 +132,14 @@ class LayerCanvas(gr.HTML):
         self.annotations = annotations
 
         layers = []
+        # Use a unique ID based on object id to avoid collisions
+        base_id = id(annotations) % 10000
         index = 0
         for annotation in annotations:
             if (annotation.get("mode") == "R"):
                 points = annotation.get("points", [])
                 layers.append({
-                    "id": index,
+                    "id": base_id * 1000 + index,
                     "type": "rectangle",
                     "name": annotation.get("class", ""),
                     "data": {
@@ -151,7 +153,7 @@ class LayerCanvas(gr.HTML):
             elif (annotation.get("mode") == "P"):
                 points = [{"x": x * width, "y": y * height} for x, y in annotation.get("points", [])]
                 layers.append({
-                    "id": index,
+                    "id": base_id * 1000 + index,
                     "type": "mask",
                     "name": annotation.get("class", ""),
                     "data": { "points": points }

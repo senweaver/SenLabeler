@@ -133,15 +133,21 @@
                 // Load existing layers if provided
                 state.layers = data.layers || [];
                 state.labels = data.labels || [];
-                // Assign IDs to layers without them
+                // Assign IDs to layers without them and track max ID
+                var maxId = 0;
                 for (var i = 0; i < state.layers.length; i++) {
                     if (!state.layers[i].id) {
                         state.layers[i].id = state.nextLayerId++;
+                    }
+                    if (state.layers[i].id > maxId) {
+                        maxId = state.layers[i].id;
                     }
                     if (!state.layers[i].visible) {
                         state.layers[i].visible = true;
                     }
                 }
+                // Ensure nextLayerId is greater than any existing layer ID
+                state.nextLayerId = Math.max(state.nextLayerId, maxId + 1);
                 state.selectedLayerId = null;
         
                 showContent();
