@@ -30,6 +30,8 @@
     var selectBtn = element.querySelector(".select-tool");
     var rectBtn = element.querySelector(".rect-tool");
     var maskBtn = element.querySelector(".mask-tool");
+    var addNodeBtn = element.querySelector(".add-node-tool");
+    var deleteNodeBtn = element.querySelector(".delete-node-tool");
     
     // Control panel buttons
     var addRectBtn = element.querySelector(".add-rect-btn");
@@ -52,7 +54,7 @@
         panStartPanX: 0,
         panStartPanY: 0,
         didDrag: false,
-        tool: "select",       // 'select', 'rect', 'mask'
+        tool: "select",       // 'select', 'rect', 'mask', 'add-node', 'delete-node'
         selectedLayerId: null,
         isDrawing: false,
         drawStart: null,      // { x, y } in canvas coordinates
@@ -359,8 +361,8 @@
         // Draw vertex handles when selected
         if (isSelected && data.points.length >= 3) {
             drawPolygonHandles(ctx, data.points, color);
-            // Draw edge hover indicator for adding points
-            if (state.hoveredEdgeInfo && state.tool === "mask") {
+            // Draw edge hover indicator for adding points (mask tool or add-node tool)
+            if (state.hoveredEdgeInfo && (state.tool === "mask" || state.tool === "add-node")) {
                 drawEdgeHoverIndicator(ctx, data.points, state.hoveredEdgeInfo);
             }
         }
@@ -685,18 +687,22 @@
         selectBtn.classList.toggle("active", toolName === "select");
         rectBtn.classList.toggle("active", toolName === "rect");
         maskBtn.classList.toggle("active", toolName === "mask");
+        if (addNodeBtn) addNodeBtn.classList.toggle("active", toolName === "add-node");
+        if (deleteNodeBtn) deleteNodeBtn.classList.toggle("active", toolName === "delete-node");
 
         // Update cursor
         updateCursor();
     }
 
     function updateCursor() {
-        interactionCanvas.classList.remove("grab", "grabbing", "crosshair", "move");
+        interactionCanvas.classList.remove("grab", "grabbing", "crosshair", "move", "pointer");
 
         if (state.tool === "select") {
             interactionCanvas.classList.add(state.isPanning ? "grabbing" : "grab");
         } else if (state.tool === "rect" || state.tool === "mask") {
             interactionCanvas.classList.add("crosshair");
+        } else if (state.tool === "add-node" || state.tool === "delete-node") {
+            interactionCanvas.classList.add("pointer");
         }
     }
 
@@ -807,6 +813,8 @@
     if (selectBtn) selectBtn.addEventListener("click", function () { setTool("select"); });
     if (rectBtn) rectBtn.addEventListener("click", function () { setTool("rect"); });
     if (maskBtn) maskBtn.addEventListener("click", function () { setTool("mask"); });
+    if (addNodeBtn) addNodeBtn.addEventListener("click", function () { setTool("add-node"); });
+    if (deleteNodeBtn) deleteNodeBtn.addEventListener("click", function () { setTool("delete-node"); });
 
     // Control panel buttons
     if (addRectBtn) addRectBtn.addEventListener("click", function () {
@@ -942,6 +950,12 @@
         } else if (state.tool === "mask") {
             // Polygon drawing mode
             handlePolygonMouseDown(pt);
+        } else if (state.tool === "add-node") {
+            // Add node to polygon tool
+            handleAddNodeMouseDown(pt);
+        } else if (state.tool === "delete-node") {
+            // Delete node from polygon tool
+            handleDeleteNodeMouseDown(pt);
         }
     });
 
@@ -1040,6 +1054,27 @@
         // Handle polygon drawing and editing
         if (state.tool === "mask") {
             handlePolygonMouseMove(clientToCanvas(e.clientX, e.clientY));
+        }
+
+        // Handle add-node and delete-node tools
+        if (state.tool === "add-node" || state.tool === "delete-node") {
+            var pt = clientToCanvas(e.clientX, e.clientY);
+            var selectedLayer = state.selectedLayerId ? findLayerById(state.selectedLayerId) : null;
+            if (selectedLayer && selectedLayer.type === LAYER_TYPES.MASK && selectedLayer.data.points) {
+                if (state.tool === "add-node") {
+                    // Show edge hover indicator for add-node tool
+                    state.hoveredEdgeInfo = getPolygonEdgeAt(pt.x, pt.y, selectedLayer.data.points);
+                    state.hoveredPointIndex = null;
+                } else {
+                    // Show point hover indicator for delete-node tool
+                    state.hoveredPointIndex = getPolygonPointAt(pt.x, pt.y, selectedLayer.data.points);
+                    state.hoveredEdgeInfo = null;
+                }
+            } else {
+                state.hoveredPointIndex = null;
+                state.hoveredEdgeInfo = null;
+            }
+            render();
         }
 
         // Update cursor based on hover state
@@ -1521,6 +1556,76 @@
         renderControlPanel();
     }
 
+    // Handle add-node tool mouse down
+    function handleAddNodeMouseDown(pt) {
+        var selectedLayer = state.layers.find(function (l) { return l.id === state.selectedLayerId; });
+        
+        // If no layer selected, try to select one by clicking on a polygon
+        if (!selectedLayer || selectedLayer.type !== LAYER_TYPES.MASK) {
+            for (var i = state.layers.length - 1; i >= 0; i--) {
+                var layer = state.layers[i];
+                if (layer.type === LAYER_TYPES.MASK && layer.data.points) {
+                    if (isPointInPolygon(pt.x, pt.y, layer.data.points)) {
+                        state.selectedLayerId = layer.id;
+                        selectedLayer = layer;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (!selectedLayer || selectedLayer.type !== LAYER_TYPES.MASK || !selectedLayer.data.points) {
+            return;
+        }
+        
+        var points = selectedLayer.data.points;
+        
+        // Check if clicking near an existing node
+        var existingNodeIndex = getPolygonPointAt(pt.x, pt.y, points);
+        if (existingNodeIndex !== null) {
+            // Clicking on existing node, select the layer
+            render();
+            return;
+        }
+        
+        // Find the closest edge to add a node
+        var edgeInfo = getPolygonEdgeAt(pt.x, pt.y, points);
+        if (edgeInfo) {
+            addPointToPolygonAtEdge(selectedLayer, edgeInfo.edgeIndex, pt);
+        }
+    }
+
+    // Handle delete-node tool mouse down
+    function handleDeleteNodeMouseDown(pt) {
+        var selectedLayer = state.layers.find(function (l) { return l.id === state.selectedLayerId; });
+        
+        // If no layer selected, try to select one by clicking on a polygon
+        if (!selectedLayer || selectedLayer.type !== LAYER_TYPES.MASK) {
+            for (var i = state.layers.length - 1; i >= 0; i--) {
+                var layer = state.layers[i];
+                if (layer.type === LAYER_TYPES.MASK && layer.data.points) {
+                    if (isPointInPolygon(pt.x, pt.y, layer.data.points)) {
+                        state.selectedLayerId = layer.id;
+                        selectedLayer = layer;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (!selectedLayer || selectedLayer.type !== LAYER_TYPES.MASK || !selectedLayer.data.points) {
+            return;
+        }
+        
+        var points = selectedLayer.data.points;
+        
+        // Check if clicking on an existing node
+        var nodeIndex = getPolygonPointAt(pt.x, pt.y, points);
+        if (nodeIndex !== null) {
+            removePointFromPolygon(selectedLayer, nodeIndex);
+        }
+    }
+
     function getPolygonEdgeAt(x, y, points) {
         var threshold = 8 / state.zoom;
         var minDist = Infinity;
@@ -1749,6 +1854,16 @@
             case "m":
             case "M":
                 setTool("mask");
+                e.preventDefault();
+                break;
+            case "a":
+            case "A":
+                setTool("add-node");
+                e.preventDefault();
+                break;
+            case "d":
+            case "D":
+                setTool("delete-node");
                 e.preventDefault();
                 break;
             case "Delete":

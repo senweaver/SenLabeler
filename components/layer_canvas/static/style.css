@@ -74,6 +74,10 @@
     cursor: ew-resize;
 }
 
+.layer-canvas-container .interaction-canvas.pointer {
+    cursor: pointer;
+}
+
 /* ── Zoom Indicator ── */
 
 .layer-canvas-container .zoom-indicator {
