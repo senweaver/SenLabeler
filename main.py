@@ -196,12 +196,19 @@ def preannotate_save_click(annotated_state, threshold):
     for annotation in annotated_state['preannotate_result']:
         if annotation["score"] < threshold: continue
 
-        annotated_state['annotation'].append({
-            "mode": annotation["mode"],
-            "class": annotation["class"],
-            "points": annotation["points"],
-            "mask": annotation.get("mask")
-        })
+        if annotation["mode"] == "M" and annotation.get("polygon") is not None:
+            annotated_state['annotation'].append({
+                "mode": "P",
+                "class": annotation["class"],
+                "points": annotation["polygon"]
+            })
+        else:
+            annotated_state['annotation'].append({
+                "mode": annotation["mode"],
+                "class": annotation["class"],
+                "points": annotation["points"],
+                "mask": annotation.get("mask")
+            })
 
     save_annotations(annotated_state['file_path'], annotated_state['annotation'])
     gr.Success("操作成功")

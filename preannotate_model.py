@@ -121,8 +121,9 @@ class PreannotateModel:
         if self.loaded == 'yoloe-26' or self.loaded == 'sam3':
             boxes = result[0].boxes.data.tolist()
             masks = result[0].masks.data
+            polygons = result[0].masks.xyn
 
-            for [x1, y1, x2, y2, score, index], mask in zip(boxes, masks):
+            for [x1, y1, x2, y2, score, index], mask, polygon in zip(boxes, masks, polygons):
                 data = mask.cpu().numpy()
 
                 ret.append({
@@ -130,7 +131,8 @@ class PreannotateModel:
                     "class": class_name,
                     "score": float(score),
                     "points": [(x1 / width, y1 / height), (x2 / width, y2 / height)],
-                    "mask": {'counts': rle_encode(data), 'size': [data.shape[0], data.shape[1]]}
+                    "mask": {'counts': rle_encode(data), 'size': [data.shape[0], data.shape[1]]},
+                    "polygon": polygon.tolist()
                 })
         elif self.loaded == 'grounding-dino':
             for box, label, score in zip(result[0]["boxes"], result[0]["text_labels"], result[0]["scores"]):
