@@ -211,8 +211,8 @@ def manual_annotator_change(annotated_state, annotator_data):
     annotated_state['annotation'] = annotator_data[1]
     return annotated_state
 
-def export_btn_click(state, annotated_state, export_format, export_type):
-    success, msg, out_dir = export(state['name'], export_format, export_type)
+def export_btn_click(state, export_format, export_type, export_ratio):
+    success, msg, out_dir = export(state['name'], export_format, export_type, export_ratio / 100)
     if success:
         gr.Success(f"导出成功，保存目录：{out_dir}")
     else:
@@ -254,8 +254,9 @@ with gr.Blocks() as app:
                 annotated_df = gr.Dataframe(label="标注列表", headers=["ID", "类别"], type="array", interactive=True)
     with gr.Tab("导出/训练", visible=False) as export_tab:
         with gr.Group():
-            export_format = gr.Dropdown(choices=["COCO"], label="导出格式")
+            export_format = gr.Dropdown(choices=["YAML"], label="导出格式")
             export_type = gr.Dropdown(choices=[("矩形框", "rect"), ("遮罩", "mask")], label="导出类型")
+            export_ratio = gr.Slider(minimum = 0, maximum = 100, value = 80, step = 1, precision = 0, label="训练集占比")
             export_btn = gr.Button("导出")
 
     # events
@@ -268,7 +269,7 @@ with gr.Blocks() as app:
 
     manual_annotator.change(manual_annotator_change, [annotated_state, manual_annotator], [annotated_state])
 
-    export_btn.click(export_btn_click, [state, annotated_state, export_format, export_type], [])
+    export_btn.click(export_btn_click, [state, export_format, export_type, export_ratio], [])
 
     gallery.select(fn=gallery_select, inputs=[gallery, state, annotated_state], outputs=[annotated_state])
     annotated_state.change(annotated_state_change, annotated_state, [preannotate_viewer, manual_annotator, annotated_image, annotated_df, preannotate_save_btn])
